@@ -14,7 +14,9 @@ let package = Package(
     ],
     dependencies: [
         // Dependencies declare other packages that this package depends on.
-        .package(url: "https://github.com/lake-of-fire/SwiftSoup.git", branch: "master"),
+//        .package(url: "https://github.com/lake-of-fire/SwiftSoup.git", branch: "master"),
+//        .package(url: "https://github.com/lake-of-fire/SwiftSoup.git", revision: "e2d11208519549c2e5798d70190472045633f22f"),
+        .package(url: "https://github.com/lake-of-fire/SwiftSoup.git", from: "2.6.0"),
     ],
     targets: [
         // Targets are the basic building blocks of a package. A target can define a module or a test suite.
