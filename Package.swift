@@ -42,7 +42,7 @@ let package = Package(
     name: "FaviconFinder",
     platforms: [
         .iOS(.v15),
-        .macOS(.v12),
+        .macOS("15.0"),
         .watchOS(.v8),
         .tvOS(.v15)
     ],
