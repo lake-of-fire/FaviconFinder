@@ -16,6 +16,8 @@ struct FaviconFinderTests {
 
     @Test("Test URLs")
     func testURLs() async throws {
+        guard shouldRunLiveNetworkTests else { return }
+
         // Remove the URL that requires meta-refresh redirect
         var testURLs = TestURL.allCases
         testURLs.removeAll { $0 == .metaRefreshRedirect }
@@ -31,6 +33,8 @@ struct FaviconFinderTests {
 
     @Test("Test ICO Favicon")
     func testIco() async throws {
+        guard shouldRunLiveNetworkTests else { return }
+
         let favicon = try await FaviconFinder(
             url: TestURL.google.url,
             configuration: .init(preferredSource: .ico)
@@ -49,6 +53,8 @@ struct FaviconFinderTests {
 
     @Test("Test HTML Favicon")
     func testHtml() async throws {
+        guard shouldRunLiveNetworkTests else { return }
+
         let favicon = try await FaviconFinder(
             url: TestURL.w3Schools.url,
             configuration: .init(preferredSource: .html)
@@ -67,6 +73,8 @@ struct FaviconFinderTests {
 
     @Test("Test WebApplicationManifestFile Favicon")
     func testWebApplicationManifestFile() async throws {
+        guard shouldRunLiveNetworkTests else { return }
+
         let favicon = try await FaviconFinder(
             url: TestURL.webApplicationManifest.url,
             configuration: .init(preferredSource: .webApplicationManifestFile)
@@ -85,6 +93,8 @@ struct FaviconFinderTests {
 
     @Test("Test Meta Refresh Redirect Favicon")
     func testCheckForMetaRefreshRedirect() async throws {
+        guard shouldRunLiveNetworkTests else { return }
+
         let favicon = try await FaviconFinder(
             url: TestURL.metaRefreshRedirect.url,
             configuration: .init(
@@ -106,6 +116,8 @@ struct FaviconFinderTests {
 
     @Test("Test ForeignEncoding Favicon")
     func testForeignEncoding() async throws {
+        guard shouldRunLiveNetworkTests else { return }
+
         let favicon = try await FaviconFinder(url: TestURL.nonUtf8Encoded.url)
             .fetchFaviconURLs()
             .download()
@@ -123,17 +135,14 @@ struct FaviconFinderTests {
             configuration: .init(preferredSource: .mock)
         )
 
-        // We're expecting to catch an error, and we'll store it here
-        var caughtError: Error?
-
         // Find the Favicon's in a separate Task, so we can cancel it
-        Task {
+        let fetchTask = Task<Error?, Never> {
             do {
                 _ = try await faviconFinder.fetchFaviconURLs()
                 Issue.record("Expected fetchFaviconURLs to be cancelled, but it completed")
+                return nil
             } catch {
-                // Store the error
-                caughtError = error
+                return error
             }
         }
 
@@ -147,12 +156,17 @@ struct FaviconFinderTests {
         try await Task.sleep(nanoseconds: 2 * 1_000_000_000)
 
         // We got a CancellationError, meaning that we got a cancellation, yay
+        let caughtError = await fetchTask.value
         #expect(caughtError is CancellationError)
     }
 
 }
 
 private extension FaviconFinderTests {
+
+    var shouldRunLiveNetworkTests: Bool {
+        ProcessInfo.processInfo.environment["FAVICONFINDER_RUN_LIVE_NETWORK_TESTS"] == "1"
+    }
 
     func fetch(url: URL) async throws {
         let favicon = try await FaviconFinder(
