@@ -17,6 +17,8 @@ xcuserdata/
 profile
 *.moved-aside
 DerivedData
+/Derived/
+/FaviconFinder.xcodeproj/
 *.hmap
 *.ipa
 
