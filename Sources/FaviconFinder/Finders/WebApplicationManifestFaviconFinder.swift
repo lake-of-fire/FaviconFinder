@@ -88,7 +88,8 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
             // Download the web page at our URL
             let response = try await FaviconURLSession.dataTask(
                 with: self.url,
-                checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect
+                checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect,
+                httpHeaders: self.configuration.httpHeaders
             )
 
             let data = response.data
@@ -138,7 +139,8 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
                 source: source,
                 format: format,
                 sourceType: .webApplicationManifestFile,
-                htmlSizeTag: sizeTag
+                htmlSizeTag: sizeTag,
+                httpHeaders: self.configuration.httpHeaders
             )
         }
 
@@ -189,7 +191,10 @@ private extension WebApplicationManifestFaviconFinder {
     func downloadManifestFile(
         with reference: ManifestFileReference
     ) async throws -> [String: Any] {
-        let response = try await FaviconURLSession.dataTask(with: reference.baseURL)
+        let response = try await FaviconURLSession.dataTask(
+            with: reference.baseURL,
+            httpHeaders: self.configuration.httpHeaders
+        )
         do {
             guard let manifestData = try JSONSerialization.jsonObject(
                 with: response.data,

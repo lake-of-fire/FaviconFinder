@@ -8,6 +8,7 @@
 
 @testable import FaviconFinder
 import Foundation
+import SwiftSoup
 import Testing
 
 struct FaviconFinderTests {
@@ -106,14 +107,45 @@ struct FaviconFinderTests {
 
     @Test("Test ForeignEncoding Favicon")
     func testForeignEncoding() async throws {
-        let favicon = try await FaviconFinder(url: TestURL.nonUtf8Encoded.url)
-            .fetchFaviconURLs()
-            .download()
-            .first()
+        let pageURL = URL(string: "https://shift-jis.example/")!
+        let urlResponse = try #require(HTTPURLResponse(
+            url: pageURL,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "text/html; charset=Shift_JIS"]
+        ))
+        let source = "<html><head><title>日本語</title><link rel=\"icon\" href=\"/favicon.ico\"></head></html>"
+        let encoded = try #require(source.data(using: .shiftJIS))
+        let response = Response((encoded, urlResponse))
+        let decoded = try #require(String(data: response.data, encoding: response.textEncoding))
+        let document = try SwiftSoup.parse(decoded)
+        let title = try document.title()
 
-        // Ensure that our favicon is actually valid
-        let image = try #require(favicon.image)
-        #expect(image.isValidImage == true)
+        let faviconURLs = try await FaviconFinder(
+            url: pageURL,
+            configuration: .init(
+                preferredSource: .html,
+                prefetchedHTML: document
+            )
+        ).fetchFaviconURLs()
+
+        #expect(title == "日本語")
+        #expect(faviconURLs.contains {
+            $0.source.absoluteURL == URL(string: "https://shift-jis.example/favicon.ico")
+        })
+    }
+
+    @Test("Resolve relative meta refresh URLs with URL semantics")
+    func testRelativeMetaRefreshURL() throws {
+        let document = try SwiftSoup.parse(
+            "<html><head><meta http-equiv=\"Refresh\" content=\"0; URL=../assets/favicon.ico\"></head></html>"
+        )
+        let baseURL = try #require(URL(string: "https://catalog.example.com/opds/pages/index.html"))
+        let redirectURL = try #require(
+            try FaviconURLSession.metaRefreshURL(in: document, relativeTo: baseURL)
+        )
+
+        #expect(redirectURL == URL(string: "https://catalog.example.com/opds/assets/favicon.ico"))
     }
 
     @Test("Test Cancel")
@@ -123,17 +155,17 @@ struct FaviconFinderTests {
             configuration: .init(preferredSource: .mock)
         )
 
-        // We're expecting to catch an error, and we'll store it here
-        var caughtError: Error?
-
         // Find the Favicon's in a separate Task, so we can cancel it
-        Task {
+        let fetchTask = Task {
             do {
                 _ = try await faviconFinder.fetchFaviconURLs()
                 Issue.record("Expected fetchFaviconURLs to be cancelled, but it completed")
+                return false
+            } catch is CancellationError {
+                return true
             } catch {
-                // Store the error
-                caughtError = error
+                Issue.record("Expected CancellationError, received \(error)")
+                return false
             }
         }
 
@@ -143,11 +175,8 @@ struct FaviconFinderTests {
         // Cancel the finding
         faviconFinder.cancel()
 
-        // Wait a couple seconds
-        try await Task.sleep(nanoseconds: 2 * 1_000_000_000)
-
         // We got a CancellationError, meaning that we got a cancellation, yay
-        #expect(caughtError is CancellationError)
+        #expect(await fetchTask.value)
     }
 
 }

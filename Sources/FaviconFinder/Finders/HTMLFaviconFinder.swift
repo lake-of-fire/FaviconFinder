@@ -91,7 +91,8 @@ final class HTMLFaviconFinder: FaviconFinderProtocol {
             // Download the web page at our URL
             let response = try await FaviconURLSession.dataTask(
                 with: self.url,
-                checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect
+                checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect,
+                httpHeaders: self.configuration.httpHeaders
             )
 
             let data = response.data
@@ -119,7 +120,8 @@ final class HTMLFaviconFinder: FaviconFinderProtocol {
                 source: $0.baseURL,
                 format: $0.format,
                 sourceType: .html,
-                htmlSizeTag: $0.sizeTag
+                htmlSizeTag: $0.sizeTag,
+                httpHeaders: self.configuration.httpHeaders
             )
         }
 
@@ -130,7 +132,8 @@ final class HTMLFaviconFinder: FaviconFinderProtocol {
                 source: $0.baseURL,
                 format: $0.format,
                 sourceType: .html,
-                size: $0.size
+                size: $0.size,
+                httpHeaders: self.configuration.httpHeaders
             )
         }
 

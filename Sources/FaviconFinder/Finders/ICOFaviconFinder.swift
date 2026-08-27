@@ -72,7 +72,8 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
         // We have the URL, let's see if there's any valid image data here
         let fullFaviconUrlData = try await FaviconURLSession.dataTask(
             with: faviconUrl,
-            checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect
+            checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect,
+            httpHeaders: self.configuration.httpHeaders
         ).data
 
         // We found valid image data, woohoo!
@@ -81,7 +82,8 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
                 FaviconURL(
                     source: faviconUrl,
                     format: .ico,
-                    sourceType: .ico
+                    sourceType: .ico,
+                    httpHeaders: self.configuration.httpHeaders
                 )
             ]
         }
@@ -98,8 +100,9 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
 
         // We created a URL without the subdomains, let's check if there's a valid image there
         let baseFaviconUrlData = try await FaviconURLSession.dataTask(
-            with: faviconUrl,
-            checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect
+            with: rootURL,
+            checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect,
+            httpHeaders: self.configuration.httpHeaders
         ).data
 
         if (try? FaviconImage(data: baseFaviconUrlData)) != nil {
@@ -108,7 +111,8 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
                 FaviconURL(
                     source: rootURL,
                     format: .ico,
-                    sourceType: .ico
+                    sourceType: .ico,
+                    httpHeaders: self.configuration.httpHeaders
                 )
             ]
         } else {
