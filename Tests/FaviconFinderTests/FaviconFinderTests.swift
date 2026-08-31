@@ -148,6 +148,35 @@ struct FaviconFinderTests {
         #expect(redirectURL == URL(string: "https://catalog.example.com/opds/assets/favicon.ico"))
     }
 
+    @Test("Strip credentials from cross-origin meta refresh requests")
+    func testCrossOriginMetaRefreshHeaders() throws {
+        let headers: [String: String?] = [
+            "Authorization": "Bearer secret",
+            "Cookie": "session=secret",
+            "Proxy-Authorization": "Basic secret",
+            "Accept-Language": "en",
+        ]
+        let source = try #require(URL(string: "https://catalog.example.com/page"))
+        let crossOrigin = try #require(URL(string: "https://icons.example.net/icon"))
+        let sameOrigin = try #require(URL(string: "https://catalog.example.com/icon"))
+
+        let filtered = try #require(FaviconURLSession.headersForMetaRefreshRedirect(
+            headers,
+            from: source,
+            to: crossOrigin
+        ))
+        #expect(filtered["Authorization"] == nil)
+        #expect(filtered["Cookie"] == nil)
+        #expect(filtered["Proxy-Authorization"] == nil)
+        #expect(filtered["Accept-Language"] == "en")
+
+        #expect(FaviconURLSession.headersForMetaRefreshRedirect(
+            headers,
+            from: source,
+            to: sameOrigin
+        ) == headers)
+    }
+
     @Test("Test Cancel")
     func testCancel() async throws {
         let faviconFinder = FaviconFinder(

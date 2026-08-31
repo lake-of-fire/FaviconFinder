@@ -141,7 +141,11 @@ private extension FaviconURLSession {
                 return try await linuxDataTask(
                     with: redirectURL,
                     checkForMetaRefreshRedirect: false,
-                    httpHeaders: httpHeaders
+                    httpHeaders: Self.headersForMetaRefreshRedirect(
+                        httpHeaders,
+                        from: url,
+                        to: redirectURL
+                    )
                 )
             }
         }
@@ -189,7 +193,14 @@ private extension FaviconURLSession {
         }
 
         var redirectRequest = URLRequest(url: redirectURL)
-        Self.addHeaders(httpHeaders, to: &redirectRequest)
+        Self.addHeaders(
+            Self.headersForMetaRefreshRedirect(
+                httpHeaders,
+                from: urlResponse.url ?? url,
+                to: redirectURL
+            ),
+            to: &redirectRequest
+        )
         let redirectResponse = try await Self.boundedData(for: redirectRequest)
         return Response(redirectResponse)
     }
@@ -225,6 +236,39 @@ private extension FaviconURLSession {
 }
 
 extension FaviconURLSession {
+
+    static func headersForMetaRefreshRedirect(
+        _ headers: [String: String?]?,
+        from sourceURL: URL,
+        to destinationURL: URL
+    ) -> [String: String?]? {
+        guard let headers else { return nil }
+
+        func effectivePort(_ url: URL) -> Int? {
+            if let port = url.port { return port }
+            switch url.scheme?.lowercased() {
+            case "http": return 80
+            case "https": return 443
+            default: return nil
+            }
+        }
+
+        let isSameOrigin = sourceURL.scheme?.lowercased()
+                == destinationURL.scheme?.lowercased()
+            && sourceURL.host?.lowercased()
+                == destinationURL.host?.lowercased()
+            && effectivePort(sourceURL) == effectivePort(destinationURL)
+        guard !isSameOrigin else { return headers }
+
+        let sensitiveNames = Set([
+            "authorization",
+            "cookie",
+            "proxy-authorization",
+        ])
+        return headers.filter { key, _ in
+            !sensitiveNames.contains(key.lowercased())
+        }
+    }
 
     /// Parses and resolves a meta refresh URL using URL's RFC 3986 relative URL rules.
     /// Kept internal so the URL semantics can be tested without making a network request.
