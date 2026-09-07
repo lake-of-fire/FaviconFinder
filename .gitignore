@@ -28,3 +28,8 @@ Package.resolved
 
 # VSCode
 .vscode/
+
+# Tuist generated files
+/Derived/
+/FaviconFinder
+/FaviconFinder.xcodeproj/
