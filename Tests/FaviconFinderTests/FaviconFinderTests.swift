@@ -13,6 +13,24 @@ import Testing
 
 struct FaviconFinderTests {
 
+    @Test func discoveredIconsKeepSensitiveHeadersOnTheirOriginOnly() async throws {
+        for destination in ["https://origin.invalid/icon.png", "https://other.invalid/icon.png"] {
+            let document = try SwiftSoup.parse("<head><link rel='icon' href='\(destination)'></head>")
+            let finder = FaviconFinder(url: URL(string: "https://origin.invalid/page")!, configuration: .init(
+                preferredSource: .html, prefetchedHTML: document,
+                httpHeaders: ["Authorization": "synthetic", "Cookie": "synthetic", "User-Agent": "ReviewTest"]
+            ))
+            let icon = try #require(try await finder.fetchFaviconURLs().first)
+            #expect(icon.httpHeaders?["User-Agent"] == "ReviewTest")
+            if icon.source.host == "origin.invalid" {
+                #expect(icon.httpHeaders?["Authorization"] == "synthetic")
+            } else {
+                #expect(icon.httpHeaders?["Authorization"] == nil)
+                #expect(icon.httpHeaders?["Cookie"] == nil)
+            }
+        }
+    }
+
     // MARK: - Tests
 
     @Test("Test URLs")

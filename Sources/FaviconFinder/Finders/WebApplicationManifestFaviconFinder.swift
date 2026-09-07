@@ -140,7 +140,9 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
                 format: format,
                 sourceType: .webApplicationManifestFile,
                 htmlSizeTag: sizeTag,
-                httpHeaders: self.configuration.httpHeaders
+                httpHeaders: FaviconURLSession.headersForMetaRefreshRedirect(
+                    self.configuration.httpHeaders, from: self.url, to: source
+                )
             )
         }
 
@@ -193,7 +195,9 @@ private extension WebApplicationManifestFaviconFinder {
     ) async throws -> [String: Any] {
         let response = try await FaviconURLSession.dataTask(
             with: reference.baseURL,
-            httpHeaders: self.configuration.httpHeaders
+            httpHeaders: FaviconURLSession.headersForMetaRefreshRedirect(
+                self.configuration.httpHeaders, from: self.url, to: reference.baseURL
+            )
         )
         do {
             guard let manifestData = try JSONSerialization.jsonObject(

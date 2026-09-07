@@ -121,7 +121,9 @@ final class HTMLFaviconFinder: FaviconFinderProtocol {
                 format: $0.format,
                 sourceType: .html,
                 htmlSizeTag: $0.sizeTag,
-                httpHeaders: self.configuration.httpHeaders
+                httpHeaders: FaviconURLSession.headersForMetaRefreshRedirect(
+                    self.configuration.httpHeaders, from: self.url, to: $0.baseURL
+                )
             )
         }
 
@@ -133,7 +135,9 @@ final class HTMLFaviconFinder: FaviconFinderProtocol {
                 format: $0.format,
                 sourceType: .html,
                 size: $0.size,
-                httpHeaders: self.configuration.httpHeaders
+                httpHeaders: FaviconURLSession.headersForMetaRefreshRedirect(
+                    self.configuration.httpHeaders, from: self.url, to: $0.baseURL
+                )
             )
         }
 
