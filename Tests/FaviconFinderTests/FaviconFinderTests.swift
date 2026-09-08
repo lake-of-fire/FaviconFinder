@@ -13,6 +13,41 @@ import Testing
 
 struct FaviconFinderTests {
 
+    @Test func icoRequestsAndResultsKeepCredentialsOnTheirOriginOnly() async throws {
+        let source = URL(string: "https://tenant.example.com/page")!
+        let headers: [String: String?] = [
+            "Authorization": "TEST_ONLY", "cOoKiE": "TEST_ONLY",
+            "Proxy-Authorization": "TEST_ONLY", "Accept-Language": "ja"
+        ]
+        let png = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6LkAAAAASUVORK5CYII="
+        ))
+        for (preferred, fallsBack) in [("favicon.ico", false), ("favicon.ico", true),
+                                     ("https://icons.example.net/icon.png", false)] {
+            let recorder = ICORequestRecorder(image: png, rejectFirst: fallsBack)
+            let finder = ICOFaviconFinder(url: source, configuration: .init(
+                preferences: [.ico: preferred], httpHeaders: headers
+            )) { url, _, headers in
+                await recorder.fetch(url: url, headers: headers)
+            }
+            let icon = try #require(try await finder.find().first)
+            let requests = await recorder.requests
+            #expect(requests.count == (fallsBack ? 2 : 1))
+            for request in requests {
+                #expect(request.headers?["Accept-Language"] == "ja")
+                if request.url.host == source.host {
+                    #expect(request.headers == headers)
+                } else {
+                    #expect(request.headers?["Authorization"] == nil)
+                    #expect(request.headers?["cOoKiE"] == nil)
+                    #expect(request.headers?["Proxy-Authorization"] == nil)
+                }
+            }
+            #expect(icon.httpHeaders == requests.last?.headers)
+            #expect(icon.source.absoluteURL == requests.last?.url.absoluteURL)
+        }
+    }
+
     @Test func discoveredIconsKeepSensitiveHeadersOnTheirOriginOnly() async throws {
         for destination in ["https://origin.invalid/icon.png", "https://other.invalid/icon.png"] {
             let document = try SwiftSoup.parse("<head><link rel='icon' href='\(destination)'></head>")
@@ -195,6 +230,25 @@ struct FaviconFinderTests {
         ) == headers)
     }
 
+    @Test("HTTP redirects cannot restore credentials on a subsequent meta refresh")
+    func testMetaRefreshAfterHTTPRedirect() throws {
+        let source = try #require(URL(string: "https://catalog.example.com/page"))
+        let landing = try #require(URL(string: "https://icons.example.net/landing"))
+        let headers: [String: String?] = [
+            "Authorization": "Bearer secret", "Cookie": "session=secret",
+            "Proxy-Authorization": "Basic secret", "Accept-Language": "en",
+        ]
+        for destination in [landing.appendingPathComponent("capture"), source] {
+            let filtered = try #require(FaviconURLSession.headersForMetaRefreshRedirect(
+                headers, from: source, to: destination, responseURL: landing
+            ))
+            #expect(filtered == ["Accept-Language": "en"])
+        }
+        #expect(FaviconURLSession.headersForMetaRefreshRedirect(
+            headers, from: source, to: source, responseURL: source
+        ) == headers)
+    }
+
     @Test("Test Cancel")
     func testCancel() async throws {
         let faviconFinder = FaviconFinder(
@@ -226,6 +280,26 @@ struct FaviconFinderTests {
         #expect(await fetchTask.value)
     }
 
+}
+
+private actor ICORequestRecorder {
+    struct Request: Sendable {
+        let url: URL
+        let headers: [String: String?]?
+    }
+    let image: Data
+    let rejectFirst: Bool
+    private(set) var requests: [Request] = []
+
+    init(image: Data, rejectFirst: Bool) {
+        self.image = image
+        self.rejectFirst = rejectFirst
+    }
+
+    func fetch(url: URL, headers: [String: String?]?) -> Data {
+        requests.append(Request(url: url, headers: headers))
+        return rejectFirst && requests.count == 1 ? Data("not an image".utf8) : image
+    }
 }
 
 private extension FaviconFinderTests {

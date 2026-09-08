@@ -196,8 +196,9 @@ private extension FaviconURLSession {
         Self.addHeaders(
             Self.headersForMetaRefreshRedirect(
                 httpHeaders,
-                from: urlResponse.url ?? url,
-                to: redirectURL
+                from: url,
+                to: redirectURL,
+                responseURL: urlResponse.url ?? url
             ),
             to: &redirectRequest
         )
@@ -240,8 +241,14 @@ extension FaviconURLSession {
     static func headersForMetaRefreshRedirect(
         _ headers: [String: String?]?,
         from sourceURL: URL,
-        to destinationURL: URL
+        to destinationURL: URL,
+        responseURL: URL? = nil
     ) -> [String: String?]? {
+        // Credentials stripped by an HTTP redirect must not be restored by meta refresh.
+        if let responseURL {
+            let survivingHeaders = headersForMetaRefreshRedirect(headers, from: sourceURL, to: responseURL)
+            return headersForMetaRefreshRedirect(survivingHeaders, from: responseURL, to: destinationURL)
+        }
         guard let headers else { return nil }
 
         func effectivePort(_ url: URL) -> Int? {
