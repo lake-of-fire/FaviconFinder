@@ -32,6 +32,7 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
 
     typealias FetchData = (URL, Bool, [String: String?]?) async throws -> Data
     private let fetchData: FetchData
+    private let isValidImage: (Data) -> Bool
 
     /// The preferred filename for the `.ico` favicon.
     /// If no preference is provided in the configuration, defaults to `"favicon.ico"`.
@@ -59,10 +60,16 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
         }
     }
 
-    init(url: URL, configuration: FaviconFinder.Configuration, fetchData: @escaping FetchData) {
+    init(
+        url: URL,
+        configuration: FaviconFinder.Configuration,
+        isValidImage: @escaping (Data) -> Bool = { (try? FaviconImage(data: $0)) != nil },
+        fetchData: @escaping FetchData
+    ) {
         self.url = url
         self.configuration = configuration
         self.fetchData = fetchData
+        self.isValidImage = isValidImage
     }
 
     private func favicon(at destination: URL) async throws -> FaviconURL? {
@@ -70,7 +77,7 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
             configuration.httpHeaders, from: url, to: destination
         )
         let data = try await fetchData(destination, configuration.checkForMetaRefreshRedirect, headers)
-        guard (try? FaviconImage(data: data)) != nil else { return nil }
+        guard isValidImage(data) else { return nil }
         return FaviconURL(source: destination, format: .ico, sourceType: .ico, httpHeaders: headers)
     }
 

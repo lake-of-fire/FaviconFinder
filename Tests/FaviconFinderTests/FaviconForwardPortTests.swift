@@ -109,7 +109,7 @@ final class FaviconForwardPortTests: XCTestCase {
             var requests: [(URL, [String: String?]?)] = []
             let finder = ICOFaviconFinder(url: source, configuration: .init(
                 preferences: [.ico: preferred], httpHeaders: headers
-            )) { url, _, headers in
+            ), isValidImage: { $0 == image }) { url, _, headers in
                 requests.append((url, headers))
                 return rejectFirst && requests.count == 1 ? Data("not an image".utf8) : image
             }
