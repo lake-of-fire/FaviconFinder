@@ -1,0 +1,60 @@
+name: Porting regression tests
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: porting-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+        configuration: [debug, release]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: FaviconFinder
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: lake-of-fire/SwiftSoup
+          ref: bf944a7fff4fa2b3c919a70d8564a094a4ddfc85
+          path: SwiftSoup
+          persist-credentials: false
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.2.1'
+      - name: Record exact inputs
+        shell: bash
+        run: |
+          mkdir -p evidence
+          swift --version > evidence/toolchain.txt
+          git -C FaviconFinder rev-parse HEAD > evidence/tested-commit.txt
+          git -C FaviconFinder ls-tree -r HEAD > evidence/source-manifest.txt
+          git -C SwiftSoup rev-parse HEAD > evidence/swiftsoup-commit.txt
+      - name: Compile full package and run tests without third-party live sites
+        working-directory: FaviconFinder
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test -c ${{ matrix.configuration }} 2>&1 | tee ../evidence/test.log
+      - name: Retain source and resolution for reproduction
+        if: always()
+        shell: bash
+        run: |
+          test ! -f FaviconFinder/Package.resolved || cp FaviconFinder/Package.resolved evidence/Package.resolved
+          tar -czf evidence/source.tar.gz FaviconFinder/Sources FaviconFinder/Tests FaviconFinder/Package.swift FaviconFinder/Package@swift-6.0.swift SwiftSoup/Package.swift SwiftSoup/Sources
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: favicon-port-${{ matrix.os }}-${{ matrix.configuration }}-${{ github.run_attempt }}
+          path: evidence
+          retention-days: 7
+          if-no-files-found: error
