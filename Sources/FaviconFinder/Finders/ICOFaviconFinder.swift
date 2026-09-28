@@ -30,6 +30,10 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
     /// such as specifying a preferred filename for `.ico` files.
     var configuration: FaviconFinder.Configuration
 
+    typealias FetchData = (URL, Bool, [String: String?]?) async throws -> Data
+    private let fetchData: FetchData
+    private let isValidImage: (Data) -> Bool
+
     /// The preferred filename for the `.ico` favicon.
     /// If no preference is provided in the configuration, defaults to `"favicon.ico"`.
     var preferredType: String {
@@ -46,9 +50,35 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
     ///
     /// - Returns: A new `ICOFaviconFinder` instance.
     ///
-    required init(url: URL, configuration: FaviconFinder.Configuration) {
+    required convenience init(url: URL, configuration: FaviconFinder.Configuration) {
+        self.init(url: url, configuration: configuration) { url, checkRedirect, headers in
+            try await FaviconURLSession.dataTask(
+                with: url,
+                checkForMetaRefreshRedirect: checkRedirect,
+                httpHeaders: headers
+            ).data
+        }
+    }
+
+    init(
+        url: URL,
+        configuration: FaviconFinder.Configuration,
+        isValidImage: @escaping (Data) -> Bool = { (try? FaviconImage(data: $0)) != nil },
+        fetchData: @escaping FetchData
+    ) {
         self.url = url
         self.configuration = configuration
+        self.fetchData = fetchData
+        self.isValidImage = isValidImage
+    }
+
+    private func favicon(at destination: URL) async throws -> FaviconURL? {
+        let headers = FaviconURLSession.headersForMetaRefreshRedirect(
+            configuration.httpHeaders, from: url, to: destination
+        )
+        let data = try await fetchData(destination, configuration.checkForMetaRefreshRedirect, headers)
+        guard isValidImage(data) else { return nil }
+        return FaviconURL(source: destination, format: .ico, sourceType: .ico, httpHeaders: headers)
     }
 
     /// Finds the `.ico` favicon at the provided URL.
@@ -69,21 +99,8 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
             throw FaviconError.failedToFindFavicon
         }
 
-        // We have the URL, let's see if there's any valid image data here
-        let fullFaviconUrlData = try await FaviconURLSession.dataTask(
-            with: faviconUrl,
-            checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect
-        ).data
-
-        // We found valid image data, woohoo!
-        if (try? FaviconImage(data: fullFaviconUrlData)) != nil {
-            return [
-                FaviconURL(
-                    source: faviconUrl,
-                    format: .ico,
-                    sourceType: .ico
-                )
-            ]
+        if let favicon = try await favicon(at: faviconUrl) {
+            return [favicon]
         }
 
         // We couldn't find any image, so let's try the root domain (just in case it's hiding there)
@@ -96,25 +113,10 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
             throw FaviconError.failedToFindFavicon
         }
 
-        // We created a URL without the subdomains, let's check if there's a valid image there
-        let baseFaviconUrlData = try await FaviconURLSession.dataTask(
-            with: faviconUrl,
-            checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect
-        ).data
-
-        if (try? FaviconImage(data: baseFaviconUrlData)) != nil {
-            // We found valid image data, woohoo!
-            return [
-                FaviconURL(
-                    source: rootURL,
-                    format: .ico,
-                    sourceType: .ico
-                )
-            ]
-        } else {
-            // Well we couldn't find any valid image data at the provided URL, nor the root domain, game over.
-            throw FaviconError.failedToFindFavicon
+        if let favicon = try await favicon(at: rootURL) {
+            return [favicon]
         }
+        throw FaviconError.failedToFindFavicon
     }
 
 }

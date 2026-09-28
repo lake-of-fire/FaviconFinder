@@ -52,6 +52,9 @@ final class HTMLFaviconFinder: FaviconFinderProtocol {
     /// for which favicon types to search for and whether meta-refresh redirects should be handled.
     var configuration: FaviconFinder.Configuration
 
+    typealias FetchDocument = (URL, Bool, [String: String?]?) async throws -> FaviconURLSession.DocumentResponse
+    private let fetchDocument: FetchDocument
+
     var preferredType: String {
         self.configuration.preferences[.html] ?? FaviconFormatType.appleTouchIcon.rawValue
     }
@@ -66,9 +69,17 @@ final class HTMLFaviconFinder: FaviconFinderProtocol {
     ///
     /// - Returns: A new `HTMLFaviconFinder` instance.
     ///
-    required init(url: URL, configuration: FaviconFinder.Configuration) {
+    required convenience init(url: URL, configuration: FaviconFinder.Configuration) {
+        self.init(url: url, configuration: configuration) { url, checkRedirect, headers in
+            try await FaviconURLSession.documentTask(with: url,
+                checkForMetaRefreshRedirect: checkRedirect, httpHeaders: headers)
+        }
+    }
+
+    init(url: URL, configuration: FaviconFinder.Configuration, fetchDocument: @escaping FetchDocument) {
         self.url = url
         self.configuration = configuration
+        self.fetchDocument = fetchDocument
     }
 
     /// Finds favicons in the HTML document. This method looks for both
@@ -84,16 +95,17 @@ final class HTMLFaviconFinder: FaviconFinderProtocol {
     ///
     func find() async throws -> [FaviconURL] {
         let html: Document
+        var documentURL = url
+        var documentHeaders = configuration.httpHeaders
 
         if let prefetchedHTML = configuration.prefetchedHTML {
             html = prefetchedHTML
         } else {
             // Download the web page at our URL
-            let response = try await FaviconURLSession.dataTask(
-                with: self.url,
-                checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect
-            )
+            let response = try await fetchDocument(self.url, self.configuration.checkForMetaRefreshRedirect, self.configuration.httpHeaders)
 
+            documentURL = response.url
+            documentHeaders = response.httpHeaders
             let data = response.data
 
             // Make sure we can parse the response into a string
@@ -111,7 +123,7 @@ final class HTMLFaviconFinder: FaviconFinderProtocol {
         }
 
         // Get all the "link" favicon tags from our head
-        let links = try self.links(from: head)
+        let links = try self.links(from: head, documentURL: documentURL)
 
         // Create FaviconURLs from our links
         var faviconURLs = links.map {
@@ -119,18 +131,24 @@ final class HTMLFaviconFinder: FaviconFinderProtocol {
                 source: $0.baseURL,
                 format: $0.format,
                 sourceType: .html,
-                htmlSizeTag: $0.sizeTag
+                htmlSizeTag: $0.sizeTag,
+                httpHeaders: FaviconURLSession.headersForMetaRefreshRedirect(
+                    documentHeaders, from: documentURL, to: $0.baseURL
+                )
             )
         }
 
         // Create FaviconURLs from our metas
-        let metas = try self.metas(from: head)
+        let metas = try self.metas(from: head, documentURL: documentURL)
         faviconURLs += metas.map {
             FaviconURL(
                 source: $0.baseURL,
                 format: $0.format,
                 sourceType: .html,
-                size: $0.size
+                size: $0.size,
+                httpHeaders: FaviconURLSession.headersForMetaRefreshRedirect(
+                    documentHeaders, from: documentURL, to: $0.baseURL
+                )
             )
         }
 
@@ -159,7 +177,7 @@ private extension HTMLFaviconFinder {
     ///
     /// - Returns: An array of `HtmlReference` objects that correspond to favicons found in `<link>`
     /// elements.
-    func links(from htmlHead: Element) throws -> [HtmlReference] {
+    func links(from htmlHead: Element, documentURL: URL) throws -> [HtmlReference] {
         // Where we're going to store our HTML favicons
         var links = [HtmlReference]()
 
@@ -176,7 +194,7 @@ private extension HTMLFaviconFinder {
             }
 
             // Get the base URL from the href
-            guard let baseURL = href.baseUrl(from: htmlHead, from: self.url) else {
+            guard let baseURL = href.baseUrl(from: htmlHead, from: documentURL) else {
                 continue
             }
 
@@ -213,7 +231,7 @@ private extension HTMLFaviconFinder {
     /// - Returns: An array of `OpenGraphicReference` objects that correspond to favicons found in
     /// `<meta>` elements.
     ///
-    func metas(from htmlHead: Element) throws -> [OpenGraphicReference] {
+    func metas(from htmlHead: Element, documentURL: URL) throws -> [OpenGraphicReference] {
         // Where we're going to store our HTML favicons
         var metas = [OpenGraphicReference]()
 
@@ -245,7 +263,7 @@ private extension HTMLFaviconFinder {
             }
 
             // Get the base URL from the href
-            guard let baseURL = content.baseUrl(from: htmlHead, from: self.url) else {
+            guard let baseURL = content.baseUrl(from: htmlHead, from: documentURL) else {
                 continue
             }
 
