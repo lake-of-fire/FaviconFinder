@@ -5,7 +5,6 @@ import SwiftSoup
 #if os(Linux)
 import AsyncHTTPClient
 import FoundationNetworking
-import NIOFoundationCompat
 import NIOHTTP1
 #endif
 
@@ -116,7 +115,7 @@ final class FaviconURLSession {
         }
         let response = try await client.execute(request, timeout: .seconds(15))
         let body = try await response.body.collect(upTo: maximumResponseBytes)
-        return LoadedResponse(response: Response((Data(buffer: body), response.headers)),
+        return LoadedResponse(response: Response((Data(body.readableBytesView), response.headers)),
                               statusCode: Int(response.status.code),
                               location: response.headers.first(name: "location"))
     }
