@@ -45,6 +45,9 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
     /// for which favicon types to search for and whether meta-refresh redirects should be handled.
     var configuration: FaviconFinder.Configuration
 
+    typealias FetchDocument = (URL, Bool, [String: String?]?) async throws -> FaviconURLSession.DocumentResponse
+    private let fetchDocument: FetchDocument
+
     /// The preferred type for manifest file lookup, which defaults to `"manifest"` if no preference is specified.
     var preferredType: String {
         self.configuration.preferences[.webApplicationManifestFile] ?? "manifest"
@@ -60,9 +63,17 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
     ///
     /// - Returns: A new `WebApplicationManifestFaviconFinder` instance.
     ///
-    required init(url: URL, configuration: FaviconFinder.Configuration) {
+    required convenience init(url: URL, configuration: FaviconFinder.Configuration) {
+        self.init(url: url, configuration: configuration) { url, checkRedirect, headers in
+            try await FaviconURLSession.documentTask(with: url,
+                checkForMetaRefreshRedirect: checkRedirect, httpHeaders: headers)
+        }
+    }
+
+    init(url: URL, configuration: FaviconFinder.Configuration, fetchDocument: @escaping FetchDocument) {
         self.url = url
         self.configuration = configuration
+        self.fetchDocument = fetchDocument
     }
 
     /// Finds favicons by looking for the web application manifest file in the HTML `<link>` tags.
@@ -81,16 +92,17 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
     ///
     func find() async throws -> [FaviconURL] {
         let html: Document
+        var documentURL = url
+        var documentHeaders = configuration.httpHeaders
 
         if let prefetchedHTML = configuration.prefetchedHTML {
             html = prefetchedHTML
         } else {
             // Download the web page at our URL
-            let response = try await FaviconURLSession.dataTask(
-                with: self.url,
-                checkForMetaRefreshRedirect: self.configuration.checkForMetaRefreshRedirect
-            )
+            let response = try await fetchDocument(self.url, self.configuration.checkForMetaRefreshRedirect, self.configuration.httpHeaders)
 
+            documentURL = response.url
+            documentHeaders = response.httpHeaders
             let data = response.data
 
             // Make sure we can parse the response into a string
@@ -108,37 +120,41 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
         }
 
         // Get a hold of a reference to our Manifest File
-        guard let manifestFileReference = try self.manifestFileReference(from: head) else {
+        guard let manifestFileReference = try self.manifestFileReference(from: head, documentURL: documentURL) else {
             throw FaviconError.failedToFindWebApplicationManifestFile
         }
 
         // Download the manifest file
-        let manifestData = try await self.downloadManifestFile(with: manifestFileReference)
+        let manifest = try await self.downloadManifestFile(
+            with: manifestFileReference, documentURL: documentURL, httpHeaders: documentHeaders
+        )
 
         // Grab our "icons" data
-        guard let rawIcons = manifestData["icons"] as? [Dictionary<String, String>] else {
+        guard let rawIcons = manifest.values["icons"] as? [[String: Any]] else {
             throw FaviconError.webApplicationManifestFileConainedNoIcons
         }
 
         // And turn it into something we can work with
         let faviconURLs = rawIcons.compactMap { rawIcon -> FaviconURL? in
-            guard let rawFormat = rawIcon["src"] else {
+            guard let rawFormat = rawIcon["src"] as? String else {
                 return nil
             }
-            guard let format = FaviconFormatType(rawValue: rawFormat) else {
+            // Preserve known legacy format cases, but ordinary manifest src
+            // values are URLs, not enum names. Sizes are optional metadata.
+            let format = FaviconFormatType(rawValue: rawFormat) ?? .icon
+            let sizeTag = rawIcon["sizes"] as? String
+            guard let source = FaviconRequestPolicy.redirectURL(rawFormat, relativeTo: manifest.url) else {
                 return nil
             }
-            guard let sizeTag = rawIcon["sizes"] else {
-                return nil
-            }
-
-            let source = self.url.appendingPathComponent(rawFormat)
 
             return FaviconURL(
                 source: source,
                 format: format,
                 sourceType: .webApplicationManifestFile,
-                htmlSizeTag: sizeTag
+                htmlSizeTag: sizeTag,
+                httpHeaders: FaviconURLSession.headersForMetaRefreshRedirect(
+                    manifest.httpHeaders, from: manifest.url, to: source
+                )
             )
         }
 
@@ -159,7 +175,7 @@ private extension WebApplicationManifestFaviconFinder {
     ///
     /// - Returns: A `ManifestFileReference` object containing the data found in the "manifest" tag.
     ///
-    func manifestFileReference(from htmlHead: Element) throws -> ManifestFileReference? {
+    func manifestFileReference(from htmlHead: Element, documentURL: URL) throws -> ManifestFileReference? {
         let manifestFileAttr = try htmlHead.select("link").first {
             try $0.attr("rel") == self.preferredType
         }
@@ -169,7 +185,7 @@ private extension WebApplicationManifestFaviconFinder {
         }
         let rel = try manifestFileAttr.attr("rel")
         let href = try manifestFileAttr.attr("href")
-        guard let baseURL = href.baseUrl(from: htmlHead, from: self.url) else {
+        guard let baseURL = href.baseUrl(from: htmlHead, from: documentURL) else {
             return nil
         }
 
@@ -187,9 +203,15 @@ private extension WebApplicationManifestFaviconFinder {
     /// - Returns: A dictionary representing the parsed manifest file.
     ///
     func downloadManifestFile(
-        with reference: ManifestFileReference
-    ) async throws -> [String: Any] {
-        let response = try await FaviconURLSession.dataTask(with: reference.baseURL)
+        with reference: ManifestFileReference,
+        documentURL: URL,
+        httpHeaders: [String: String?]?
+    ) async throws -> (values: [String: Any], url: URL, httpHeaders: [String: String?]?) {
+        let response = try await fetchDocument(
+            reference.baseURL, false, FaviconURLSession.headersForMetaRefreshRedirect(
+                httpHeaders, from: documentURL, to: reference.baseURL
+            )
+        )
         do {
             guard let manifestData = try JSONSerialization.jsonObject(
                 with: response.data,
@@ -198,7 +220,7 @@ private extension WebApplicationManifestFaviconFinder {
                 throw FaviconError.failedToDownloadWebApplicationManifestFile
             }
 
-            return manifestData
+            return (manifestData, response.url, response.httpHeaders)
         } catch {
             throw FaviconError.failedToParseWebApplicationManifestFile
         }
