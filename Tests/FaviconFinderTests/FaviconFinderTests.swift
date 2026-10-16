@@ -8,9 +8,63 @@
 
 @testable import FaviconFinder
 import Foundation
+import SwiftSoup
 import Testing
 
 struct FaviconFinderTests {
+
+    @Test func icoRequestsAndResultsKeepCredentialsOnTheirOriginOnly() async throws {
+        let source = URL(string: "https://tenant.example.com/page")!
+        let headers: [String: String?] = [
+            "Authorization": "TEST_ONLY", "cOoKiE": "TEST_ONLY",
+            "Proxy-Authorization": "TEST_ONLY", "Accept-Language": "ja"
+        ]
+        let png = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6LkAAAAASUVORK5CYII="
+        ))
+        for (preferred, fallsBack) in [("favicon.ico", false), ("favicon.ico", true),
+                                     ("https://icons.example.net/icon.png", false)] {
+            let recorder = ICORequestRecorder(image: png, rejectFirst: fallsBack)
+            let finder = ICOFaviconFinder(url: source, configuration: .init(
+                preferences: [.ico: preferred], httpHeaders: headers
+            )) { url, _, headers in
+                await recorder.fetch(url: url, headers: headers)
+            }
+            let icon = try #require(try await finder.find().first)
+            let requests = await recorder.requests
+            #expect(requests.count == (fallsBack ? 2 : 1))
+            for request in requests {
+                #expect(request.headers?["Accept-Language"] == "ja")
+                if request.url.host == source.host {
+                    #expect(request.headers == headers)
+                } else {
+                    #expect(request.headers?["Authorization"] == nil)
+                    #expect(request.headers?["cOoKiE"] == nil)
+                    #expect(request.headers?["Proxy-Authorization"] == nil)
+                }
+            }
+            #expect(icon.httpHeaders == requests.last?.headers)
+            #expect(icon.source.absoluteURL == requests.last?.url.absoluteURL)
+        }
+    }
+
+    @Test func discoveredIconsKeepSensitiveHeadersOnTheirOriginOnly() async throws {
+        for destination in ["https://origin.invalid/icon.png", "https://other.invalid/icon.png"] {
+            let document = try SwiftSoup.parse("<head><link rel='icon' href='\(destination)'></head>")
+            let finder = FaviconFinder(url: URL(string: "https://origin.invalid/page")!, configuration: .init(
+                preferredSource: .html, prefetchedHTML: document,
+                httpHeaders: ["Authorization": "synthetic", "Cookie": "synthetic", "User-Agent": "ReviewTest"]
+            ))
+            let icon = try #require(try await finder.fetchFaviconURLs().first)
+            #expect(icon.httpHeaders?["User-Agent"] == "ReviewTest")
+            if icon.source.host == "origin.invalid" {
+                #expect(icon.httpHeaders?["Authorization"] == "synthetic")
+            } else {
+                #expect(icon.httpHeaders?["Authorization"] == nil)
+                #expect(icon.httpHeaders?["Cookie"] == nil)
+            }
+        }
+    }
 
     // MARK: - Tests
 
@@ -106,14 +160,93 @@ struct FaviconFinderTests {
 
     @Test("Test ForeignEncoding Favicon")
     func testForeignEncoding() async throws {
-        let favicon = try await FaviconFinder(url: TestURL.nonUtf8Encoded.url)
-            .fetchFaviconURLs()
-            .download()
-            .first()
+        let pageURL = URL(string: "https://shift-jis.example/")!
+        let urlResponse = try #require(HTTPURLResponse(
+            url: pageURL,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "text/html; charset=Shift_JIS"]
+        ))
+        let source = "<html><head><title>日本語</title><link rel=\"icon\" href=\"/favicon.ico\"></head></html>"
+        let encoded = try #require(source.data(using: .shiftJIS))
+        let response = Response((encoded, urlResponse))
+        let decoded = try #require(String(data: response.data, encoding: response.textEncoding))
+        let document = try SwiftSoup.parse(decoded)
+        let title = try document.title()
 
-        // Ensure that our favicon is actually valid
-        let image = try #require(favicon.image)
-        #expect(image.isValidImage == true)
+        let faviconURLs = try await FaviconFinder(
+            url: pageURL,
+            configuration: .init(
+                preferredSource: .html,
+                prefetchedHTML: document
+            )
+        ).fetchFaviconURLs()
+
+        #expect(title == "日本語")
+        #expect(faviconURLs.contains {
+            $0.source.absoluteURL == URL(string: "https://shift-jis.example/favicon.ico")
+        })
+    }
+
+    @Test("Resolve relative meta refresh URLs with URL semantics")
+    func testRelativeMetaRefreshURL() throws {
+        let document = try SwiftSoup.parse(
+            "<html><head><meta http-equiv=\"Refresh\" content=\"0; URL=../assets/favicon.ico\"></head></html>"
+        )
+        let baseURL = try #require(URL(string: "https://catalog.example.com/opds/pages/index.html"))
+        let redirectURL = try #require(
+            try FaviconURLSession.metaRefreshURL(in: document, relativeTo: baseURL)
+        )
+
+        #expect(redirectURL == URL(string: "https://catalog.example.com/opds/assets/favicon.ico"))
+    }
+
+    @Test("Strip credentials from cross-origin meta refresh requests")
+    func testCrossOriginMetaRefreshHeaders() throws {
+        let headers: [String: String?] = [
+            "Authorization": "Bearer secret",
+            "Cookie": "session=secret",
+            "Proxy-Authorization": "Basic secret",
+            "Accept-Language": "en",
+        ]
+        let source = try #require(URL(string: "https://catalog.example.com/page"))
+        let crossOrigin = try #require(URL(string: "https://icons.example.net/icon"))
+        let sameOrigin = try #require(URL(string: "https://catalog.example.com/icon"))
+
+        let filtered = try #require(FaviconURLSession.headersForMetaRefreshRedirect(
+            headers,
+            from: source,
+            to: crossOrigin
+        ))
+        #expect(filtered["Authorization"] == nil)
+        #expect(filtered["Cookie"] == nil)
+        #expect(filtered["Proxy-Authorization"] == nil)
+        #expect(filtered["Accept-Language"] == "en")
+
+        #expect(FaviconURLSession.headersForMetaRefreshRedirect(
+            headers,
+            from: source,
+            to: sameOrigin
+        ) == headers)
+    }
+
+    @Test("HTTP redirects cannot restore credentials on a subsequent meta refresh")
+    func testMetaRefreshAfterHTTPRedirect() throws {
+        let source = try #require(URL(string: "https://catalog.example.com/page"))
+        let landing = try #require(URL(string: "https://icons.example.net/landing"))
+        let headers: [String: String?] = [
+            "Authorization": "Bearer secret", "Cookie": "session=secret",
+            "Proxy-Authorization": "Basic secret", "Accept-Language": "en",
+        ]
+        for destination in [landing.appendingPathComponent("capture"), source] {
+            let filtered = try #require(FaviconURLSession.headersForMetaRefreshRedirect(
+                headers, from: source, to: destination, responseURL: landing
+            ))
+            #expect(filtered == ["Accept-Language": "en"])
+        }
+        #expect(FaviconURLSession.headersForMetaRefreshRedirect(
+            headers, from: source, to: source, responseURL: source
+        ) == headers)
     }
 
     @Test("Test Cancel")
@@ -123,17 +256,17 @@ struct FaviconFinderTests {
             configuration: .init(preferredSource: .mock)
         )
 
-        // We're expecting to catch an error, and we'll store it here
-        var caughtError: Error?
-
         // Find the Favicon's in a separate Task, so we can cancel it
-        Task {
+        let fetchTask = Task {
             do {
                 _ = try await faviconFinder.fetchFaviconURLs()
                 Issue.record("Expected fetchFaviconURLs to be cancelled, but it completed")
+                return false
+            } catch is CancellationError {
+                return true
             } catch {
-                // Store the error
-                caughtError = error
+                Issue.record("Expected CancellationError, received \(error)")
+                return false
             }
         }
 
@@ -143,13 +276,30 @@ struct FaviconFinderTests {
         // Cancel the finding
         faviconFinder.cancel()
 
-        // Wait a couple seconds
-        try await Task.sleep(nanoseconds: 2 * 1_000_000_000)
-
         // We got a CancellationError, meaning that we got a cancellation, yay
-        #expect(caughtError is CancellationError)
+        #expect(await fetchTask.value)
     }
 
+}
+
+private actor ICORequestRecorder {
+    struct Request: Sendable {
+        let url: URL
+        let headers: [String: String?]?
+    }
+    let image: Data
+    let rejectFirst: Bool
+    private(set) var requests: [Request] = []
+
+    init(image: Data, rejectFirst: Bool) {
+        self.image = image
+        self.rejectFirst = rejectFirst
+    }
+
+    func fetch(url: URL, headers: [String: String?]?) -> Data {
+        requests.append(Request(url: url, headers: headers))
+        return rejectFirst && requests.count == 1 ? Data("not an image".utf8) : image
+    }
 }
 
 private extension FaviconFinderTests {

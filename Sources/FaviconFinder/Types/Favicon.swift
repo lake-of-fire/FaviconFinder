@@ -41,7 +41,10 @@ public struct Favicon: Sendable {
         self.url = url
 
         // Download the image from the URL provided, and store the data and image
-        let data = try await FaviconURLSession.dataTask(with: url.source).data
+        let data = try await FaviconURLSession.dataTask(
+            with: url.source,
+            httpHeaders: url.httpHeaders
+        ).data
         guard let image = try? FaviconImage(data: data) else {
             throw FaviconError.invalidImage
         }

@@ -67,4 +67,17 @@ struct FaviconURLTests {
         #expect(smallest == testSubject[0])
     }
 
+    @Test("FaviconURL retains headers needed by the final image request")
+    func testRetainsDownloadHeaders() {
+        let headers = ["Authorization": "Bearer test", "X-Optional": nil]
+        let subject = FaviconURL(
+            source: TestURL.google.url,
+            format: .ico,
+            sourceType: .html,
+            httpHeaders: headers
+        )
+
+        #expect(subject.httpHeaders == headers)
+    }
+
 }

@@ -11,6 +11,13 @@ import Foundation
 /// metadata like format, size, and source type.
 public struct FaviconURL: Equatable, Sendable {
 
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.source == rhs.source
+            && lhs.format == rhs.format
+            && lhs.sourceType == rhs.sourceType
+            && lhs.size == rhs.size
+    }
+
     // MARK: - Properties
 
     /// The url of the .ico or HTML page, of where the favicon was found
@@ -24,6 +31,10 @@ public struct FaviconURL: Equatable, Sendable {
 
     /// If the icon metadata tells us the size, we'll store it here
     public let size: FaviconSize?
+
+    /// Headers used to discover this icon are also required when downloading
+    /// the final image (for example, an authorization or custom user-agent).
+    let httpHeaders: [String: String?]?
 
     // MARK: - Lifecycle
 
@@ -39,12 +50,14 @@ public struct FaviconURL: Equatable, Sendable {
         source: URL,
         format: FaviconFormatType,
         sourceType: FaviconSourceType,
-        size: FaviconSize? = nil
+        size: FaviconSize? = nil,
+        httpHeaders: [String: String?]? = nil
     ) {
         self.source = source
         self.format = format
         self.sourceType = sourceType
         self.size = size
+        self.httpHeaders = httpHeaders
     }
 
     /// Initializes a `FaviconURL` using an HTML size tag to infer the favicon size.
@@ -59,12 +72,14 @@ public struct FaviconURL: Equatable, Sendable {
         source: URL,
         format: FaviconFormatType,
         sourceType: FaviconSourceType,
-        htmlSizeTag: String?
+        htmlSizeTag: String?,
+        httpHeaders: [String: String?]? = nil
     ) {
         self.source = source
         self.format = format
         self.sourceType = sourceType
         self.size = Self.inferredSize(from: htmlSizeTag)
+        self.httpHeaders = httpHeaders
     }
 
 }

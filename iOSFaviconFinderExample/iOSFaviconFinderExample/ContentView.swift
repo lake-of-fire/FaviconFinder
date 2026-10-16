@@ -10,7 +10,7 @@ import SwiftUI
 
 struct ContentView: View {
 
-    @State var urlStr = "https://googlechrome.github.io/samples/web-application-manifest"
+    @State private var urlStr = "https://googlechrome.github.io/samples/web-application-manifest"
     @ObservedObject var imageLoader = ImageLoader()
 
     var body: some View {

@@ -9,11 +9,11 @@ let dependencies: [PackageDescription.Package.Dependency] = [
     .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.22.0"),
 
     // SwiftSoup is used to parse the HTML tree
-    .package(path: "../SwiftSoup")
+    .package(url: "https://github.com/scinfu/SwiftSoup.git", branch: "master")
 ]
 
 let targetDependencies: [Target.Dependency] = [
-    "SwiftSoup",
+    .product(name: "SwiftSoup", package: "SwiftSoup"),
     .product(name: "AsyncHTTPClient", package: "async-http-client")
 ]
 
@@ -24,12 +24,12 @@ let plugins: [Target.PluginUsage] = [
 #else
 let dependencies: [PackageDescription.Package.Dependency] = [
     // SwiftSoup is used to parse the HTML tree
-    .package(path: "../SwiftSoup"),
+    .package(url: "https://github.com/scinfu/SwiftSoup.git", branch: "master"),
     .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.4.3")
 ]
 
 let targetDependencies: [Target.Dependency] = [
-    "SwiftSoup"
+    .product(name: "SwiftSoup", package: "SwiftSoup")
 ]
 
 let plugins: [Target.PluginUsage] = [

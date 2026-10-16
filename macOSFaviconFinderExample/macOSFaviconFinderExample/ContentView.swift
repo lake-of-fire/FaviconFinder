@@ -10,7 +10,7 @@ import SwiftUI
 
 struct ContentView: View {
 
-    @State var urlStr = "https://www.plinky.app"
+    @State private var urlStr = "https://www.plinky.app"
     @ObservedObject var imageLoader = ImageLoader()
 
     var body: some View {
