@@ -98,6 +98,8 @@ final class FaviconURLSessionResponseLimitTests: XCTestCase {
             await fulfillment(of: [fixture.stoppedAfterCleanup], timeout: 2)
         }
         await fulfillment(of: [exited], timeout: 2)
+        // A timeout assertion is not quiescence; keep registration until the operation joins.
+        await operation.value
     }
 }
 

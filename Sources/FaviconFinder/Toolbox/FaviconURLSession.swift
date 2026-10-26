@@ -151,7 +151,9 @@ private extension FaviconURLSession {
         }
 
         // Return the response with data and headers
-        return Response((data, response.headers))
+        return Self.preservingRequestHeaders(
+            in: Response((data, response.headers)), sentTo: url, httpHeaders: httpHeaders
+        )
     }
 
     #else
@@ -179,7 +181,9 @@ private extension FaviconURLSession {
         Self.addHeaders(httpHeaders, to: &request)
 
         let (data, urlResponse) = try await Self.boundedData(for: request)
-        let response = Response((data, urlResponse))
+        let response = Self.preservingRequestHeaders(
+            in: Response((data, urlResponse)), sentTo: url, httpHeaders: httpHeaders
+        )
 
         guard checkForMetaRefreshRedirect,
               let htmlString = String(data: data, encoding: response.textEncoding),
@@ -193,17 +197,16 @@ private extension FaviconURLSession {
         }
 
         var redirectRequest = URLRequest(url: redirectURL)
-        Self.addHeaders(
-            Self.headersForMetaRefreshRedirect(
-                httpHeaders,
-                from: url,
-                to: redirectURL,
-                responseURL: urlResponse.url ?? url
-            ),
-            to: &redirectRequest
+        let redirectHeaders = Self.headersForMetaRefreshRedirect(
+            response.requestContext?.httpHeaders,
+            from: urlResponse.url ?? url,
+            to: redirectURL
         )
+        Self.addHeaders(redirectHeaders, to: &redirectRequest)
         let redirectResponse = try await Self.boundedData(for: redirectRequest)
-        return Response(redirectResponse)
+        return Self.preservingRequestHeaders(
+            in: Response(redirectResponse), sentTo: redirectURL, httpHeaders: redirectHeaders
+        )
     }
 
     static func addHeaders(_ httpHeaders: [String: String?]?, to request: inout URLRequest) {
@@ -237,6 +240,23 @@ private extension FaviconURLSession {
 }
 
 extension FaviconURLSession {
+
+    /// Retain the headers of this actual request after filtering its visible
+    /// response origin. Explicit meta refresh can then carry that evidence to
+    /// later manifest/icon requests without resurrecting configuration headers.
+    static func preservingRequestHeaders(
+        in response: Response,
+        sentTo requestURL: URL,
+        httpHeaders: [String: String?]?
+    ) -> Response {
+        let surviving = headersForMetaRefreshRedirect(
+            httpHeaders, from: requestURL, to: response.url ?? requestURL
+        )
+        return Response(
+            data: response.data, url: response.url, textEncoding: response.textEncoding,
+            requestContext: .init(httpHeaders: surviving)
+        )
+    }
 
     static func headersForMetaRefreshRedirect(
         _ headers: [String: String?]?,

@@ -19,7 +19,10 @@ import NIOHTTP1
 /// It abstracts away platform-specific differences, like text encoding and response handling, making it easier to
 /// work with HTTP responses in a cross-platform manner.
 ///
-struct Response {
+struct Response: Sendable {
+    struct RequestContext: Sendable {
+        let httpHeaders: [String: String?]?
+    }
 
     // MARK: - Properties
 
@@ -28,6 +31,18 @@ struct Response {
 
     /// The text encoding used in the response, defaulting to UTF-8 if not specified.
     let textEncoding: String.Encoding
+
+    /// The final response URL, when exposed by the platform transport.
+    let url: URL?
+    /// Nil means unknown; a present context with empty headers must stay empty.
+    let requestContext: RequestContext?
+
+    init(data: Data, url: URL?, textEncoding: String.Encoding = .utf8, requestContext: RequestContext? = nil) {
+        self.data = data
+        self.url = url
+        self.textEncoding = textEncoding
+        self.requestContext = requestContext
+    }
 
     // MARK: - Lifecycle
 
@@ -39,6 +54,9 @@ struct Response {
     ///
     init(_ rawResponse: (Data, HTTPHeaders)) {
         self.data = rawResponse.0
+        // AsyncHTTPClient's response used here does not carry a final URL.
+        self.url = nil
+        self.requestContext = nil
 
         let responseHeaders = rawResponse.1
         guard let contentType = responseHeaders["content-type"].first else {
@@ -63,7 +81,9 @@ struct Response {
     ///
     init(_ rawResponse: (Data, URLResponse)) {
         self.data = rawResponse.0
+        self.url = rawResponse.1.url
         self.textEncoding = rawResponse.1.encoding
+        self.requestContext = nil
     }
 
 #endif
