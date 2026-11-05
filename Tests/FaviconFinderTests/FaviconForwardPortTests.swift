@@ -296,6 +296,60 @@ final class FaviconForwardPortTests: XCTestCase {
         }
     }
 
+    func testManifestChoosesLargestValidDeclaredSize() async throws {
+        let html = try SwiftSoup.parse("<head><link rel='manifest' href='/app.webmanifest'></head>")
+        let cases: [(String, FaviconSize)] = [
+            ("16x16 32x32 24x24", FaviconSize(width: 32, height: 32)),
+            ("  any\t48X48\n16x16 ", FaviconSize(width: 48, height: 48)),
+            ("64x16 40x40", FaviconSize(width: 40, height: 40)),
+            ("bad 0x8 -1x2 1.5x2 1e3x2 ２x２ 32x32x32 8x8", FaviconSize(width: 8, height: 8)),
+            ("16x16", FaviconSize(width: 16, height: 16))
+        ]
+        for (sizes, expected) in cases {
+            let data = try JSONSerialization.data(withJSONObject: ["icons": [["src": "icon.png", "sizes": sizes]]])
+            let body = try XCTUnwrap(String(data: data, encoding: .utf8))
+            let finder = WebApplicationManifestFaviconFinder(url: source,
+                configuration: .init(prefetchedHTML: html, httpHeaders: headers)
+            ) { url, _, sentHeaders in
+                .init(response: self.response(url, body: body).response,
+                      url: url, httpHeaders: sentHeaders)
+            }
+            let icons = try await finder.find()
+            XCTAssertEqual(icons.count, 1)
+            let icon = try XCTUnwrap(icons.first)
+            XCTAssertEqual(icon.size, expected, sizes)
+            XCTAssertEqual(icon.source.absoluteString, "https://origin.example.com/icon.png")
+            XCTAssertEqual(icon.httpHeaders, headers)
+        }
+    }
+
+    func testManifestKeepsIconsWithoutValidFiniteSizeMetadata() async throws {
+        let html = try SwiftSoup.parse("<head><link rel='manifest' href='/app.webmanifest'></head>")
+        let hugeDimension = String(repeating: "9", count: 400)
+        let overflowingAreaDimension = String(repeating: "9", count: 200)
+        let sizes: [Any] = [
+            NSNull(), 16, "", "any", "0x16", "-1x16", "1.5x2", "NaNx2", "Infinityx2",
+            "1e3x2", "x16", "16x", "２x２",
+            "\(hugeDimension)x1", "\(overflowingAreaDimension)x\(overflowingAreaDimension)"
+        ]
+        var entries: [[String: Any]] = sizes.enumerated().map { offset, size in
+            ["src": "icon-\(offset).png", "sizes": size]
+        }
+        entries.append(["src": "no-size.png"])
+        let data = try JSONSerialization.data(withJSONObject: ["icons": entries])
+        let body = try XCTUnwrap(String(data: data, encoding: .utf8))
+        let finder = WebApplicationManifestFaviconFinder(url: source,
+            configuration: .init(prefetchedHTML: html)
+        ) { url, _, _ in
+            .init(response: self.response(url, body: body).response, url: url, httpHeaders: nil)
+        }
+        let icons = try await finder.find()
+        XCTAssertEqual(icons.count, entries.count)
+        XCTAssertEqual(icons.map { $0.source.lastPathComponent },
+                       entries.compactMap { $0["src"] as? String })
+        XCTAssertTrue(icons.allSatisfy { $0.size == nil })
+    }
+
     func testCancellationDuringLoadCannotPublishAResponse() async {
         let source = self.source
         let task = Task {
