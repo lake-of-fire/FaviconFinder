@@ -130,13 +130,14 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
         )
 
         // Grab our "icons" data
-        guard let rawIcons = manifest.values["icons"] as? [[String: Any]] else {
+        guard let rawIcons = manifest.values["icons"] as? [Any] else {
             throw FaviconError.webApplicationManifestFileConainedNoIcons
         }
 
         // And turn it into something we can work with
-        var faviconURLs = rawIcons.compactMap { rawIcon -> FaviconURL? in
-            guard let rawFormat = rawIcon["src"] as? String else {
+        var faviconURLs = rawIcons.compactMap { value -> FaviconURL? in
+            guard let rawIcon = value as? [String: Any],
+                  let rawFormat = rawIcon["src"] as? String else {
                 return nil
             }
             // Preserve known legacy format cases, but ordinary manifest src
@@ -158,6 +159,9 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
             )
         }
 
+        guard !faviconURLs.isEmpty else {
+            throw FaviconError.webApplicationManifestFileConainedNoIcons
+        }
         if !preferredType.isEmpty,
            let preferredURL = FaviconRequestPolicy.redirectURL(preferredType, relativeTo: manifest.url),
            let index = faviconURLs.firstIndex(where: { $0.source == preferredURL }) {

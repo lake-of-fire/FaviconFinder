@@ -236,6 +236,66 @@ final class FaviconForwardPortTests: XCTestCase {
         XCTAssertEqual(requests, 0)
     }
 
+    func testManifestKeepsUsableIconsAmongMalformedMembers() async throws {
+        let html = try SwiftSoup.parse("<head><link rel='manifest' href='/app.webmanifest'></head>")
+        let finalURL = URL(string: "https://cdn.example.net/manifests/app.webmanifest")!
+        let body = """
+            {"icons":[null,7,"invalid",[],{},{"src":false},
+            {"src":"file:///tmp/icon.png"},{"src":"https://user:password@origin.example.com/icon.png"},
+            {"src":"first.png","sizes":"16x16"},{"src":"preferred.png"},{"src":"last.png"}]}
+            """
+        var requests = 0
+        let finder = WebApplicationManifestFaviconFinder(url: source,
+            configuration: .init(preferences: [.webApplicationManifestFile: "preferred.png"],
+                                 prefetchedHTML: html, httpHeaders: headers)
+        ) { _, _, sentHeaders in
+            requests += 1
+            XCTAssertEqual(sentHeaders, self.headers)
+            return .init(response: self.response(finalURL, body: body).response,
+                         url: finalURL, httpHeaders: ["Accept-Language": "ja"])
+        }
+        let icons = try await finder.find()
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(icons.map { $0.source.absoluteString }, [
+            "https://cdn.example.net/manifests/preferred.png",
+            "https://cdn.example.net/manifests/first.png",
+            "https://cdn.example.net/manifests/last.png"
+        ])
+        XCTAssertEqual(icons[1].size, FaviconSize(width: 16, height: 16))
+        for icon in icons { XCTAssertEqual(icon.httpHeaders, ["Accept-Language": "ja"]) }
+    }
+
+    func testManifestWithoutUsableIconsThrowsInsteadOfReturningEmptySuccess() async throws {
+        let html = try SwiftSoup.parse("<head><link rel='manifest' href='/app.webmanifest'></head>")
+        let bodies = [
+            #"{"icons":[]}"#,
+            #"{"icons":[{},{"src":""},{"src":"  "},{"src":7}]}"#,
+            #"{"icons":[{"src":"file:///tmp/icon.png"},{"src":"data:image/png;base64,AA=="},{"src":"https://user:password@origin.example.com/icon.png"}]}"#,
+            #"{"icons":[null,7,"invalid",[]]}"#,
+            #"{"icons":{}}"#,
+            #"{}"#
+        ]
+        for body in bodies {
+            var requests = 0
+            let finder = WebApplicationManifestFaviconFinder(url: source,
+                configuration: .init(prefetchedHTML: html)
+            ) { url, _, _ in
+                requests += 1
+                return .init(response: self.response(url, body: body).response,
+                             url: url, httpHeaders: nil)
+            }
+            do {
+                _ = try await finder.find()
+                XCTFail("A manifest without usable icons must permit the caller to try another source")
+            } catch {
+                guard case FaviconError.webApplicationManifestFileConainedNoIcons = error else {
+                    return XCTFail("Unexpected error: \(error)")
+                }
+            }
+            XCTAssertEqual(requests, 1)
+        }
+    }
+
     func testCancellationDuringLoadCannotPublishAResponse() async {
         let source = self.source
         let task = Task {
