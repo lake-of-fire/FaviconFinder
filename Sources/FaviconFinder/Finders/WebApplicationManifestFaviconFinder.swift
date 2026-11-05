@@ -130,19 +130,19 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
         )
 
         // Grab our "icons" data
-        guard let rawIcons = manifest.values["icons"] as? [[String: Any]] else {
+        guard let rawIcons = manifest.values["icons"] as? [Any] else {
             throw FaviconError.webApplicationManifestFileConainedNoIcons
         }
 
         // And turn it into something we can work with
-        var faviconURLs = rawIcons.compactMap { rawIcon -> FaviconURL? in
-            guard let rawFormat = rawIcon["src"] as? String else {
+        var faviconURLs = rawIcons.compactMap { value -> FaviconURL? in
+            guard let rawIcon = value as? [String: Any],
+                  let rawFormat = rawIcon["src"] as? String else {
                 return nil
             }
             // Preserve known legacy format cases, but ordinary manifest src
             // values are URLs, not enum names. Sizes are optional metadata.
             let format = FaviconFormatType(rawValue: rawFormat) ?? .icon
-            let sizeTag = rawIcon["sizes"] as? String
             guard let source = FaviconRequestPolicy.redirectURL(rawFormat, relativeTo: manifest.url) else {
                 return nil
             }
@@ -151,13 +151,16 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
                 source: source,
                 format: format,
                 sourceType: .webApplicationManifestFile,
-                htmlSizeTag: sizeTag,
+                size: Self.largestDeclaredSize(rawIcon["sizes"] as? String),
                 httpHeaders: FaviconURLSession.headersForMetaRefreshRedirect(
                     manifest.httpHeaders, from: manifest.url, to: source
                 )
             )
         }
 
+        guard !faviconURLs.isEmpty else {
+            throw FaviconError.webApplicationManifestFileConainedNoIcons
+        }
         if !preferredType.isEmpty,
            let preferredURL = FaviconRequestPolicy.redirectURL(preferredType, relativeTo: manifest.url),
            let index = faviconURLs.firstIndex(where: { $0.source == preferredURL }) {
@@ -230,6 +233,18 @@ private extension WebApplicationManifestFaviconFinder {
         } catch {
             throw FaviconError.failedToParseWebApplicationManifestFile
         }
+    }
+
+    static func largestDeclaredSize(_ sizes: String?) -> FaviconSize? {
+        sizes?.split(whereSeparator: { $0.isWhitespace }).compactMap { token -> FaviconSize? in
+            let dimensions = token.lowercased().split(separator: "x", omittingEmptySubsequences: false)
+            guard dimensions.count == 2,
+                  dimensions.allSatisfy({ !$0.isEmpty && $0.allSatisfy({ $0.isASCII && $0.isNumber }) }),
+                  let width = Double(dimensions[0]), let height = Double(dimensions[1]),
+                  width > 0, height > 0, width.isFinite, height.isFinite,
+                  (width * height).isFinite else { return nil }
+            return FaviconSize(width: width, height: height)
+        }.max(by: { $0.dimension < $1.dimension })
     }
 
 }
