@@ -1,5 +1,6 @@
 #if os(macOS) || os(Linux)
 import Foundation
+import Dispatch
 import XCTest
 @testable import FaviconFinder
 
@@ -86,6 +87,8 @@ private final class LoopbackFaviconServer {
     private let process = Process()
     private let output = Pipe()
     private let input = Pipe()
+    private let terminated = DispatchSemaphore(value: 0)
+    private var stopped = false
     private let port: Int
     let headers: [String: String?] = ["Authorization": "TEST_ONLY", "Cookie": "TEST_ONLY",
                                      "X-Api-Key": "TEST_ONLY", "Accept-Language": "ja"]
@@ -95,6 +98,8 @@ private final class LoopbackFaviconServer {
         process.arguments = ["python3", "-u", "-c", Self.program]
         process.standardOutput = output
         process.standardInput = input
+        let terminated = self.terminated
+        process.terminationHandler = { _ in terminated.signal() }
         try process.run()
         // The child emits one small JSON startup record. EOF on startup failure
         // throws rather than selecting a guessed/fixed port.
@@ -112,9 +117,17 @@ private final class LoopbackFaviconServer {
         try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
     }
     func stop() {
+        guard !stopped else { return }
+        stopped = true
         try? input.fileHandleForWriting.close()
         if process.isRunning { process.terminate() }
-        process.waitUntilExit()
+        // Foundation's run-loop-based waitUntilExit can stall on a cooperative
+        // executor even after the child exits. Join the registered exit event;
+        // deinit must not consume that one-shot notification a second time.
+        if terminated.wait(timeout: .now() + 5) == .timedOut {
+            XCTFail("Loopback fixture did not terminate within five seconds")
+            terminated.wait() // Keep ownership until actual child termination.
+        }
     }
     deinit { stop() }
 
