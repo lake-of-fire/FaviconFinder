@@ -48,9 +48,9 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
     typealias FetchDocument = (URL, Bool, [String: String?]?) async throws -> FaviconURLSession.DocumentResponse
     private let fetchDocument: FetchDocument
 
-    /// The preferred type for manifest file lookup, which defaults to `"manifest"` if no preference is specified.
+    /// An optional preferred icon source, independent of the manifest link relation.
     var preferredType: String {
-        self.configuration.preferences[.webApplicationManifestFile] ?? "manifest"
+        self.configuration.preferences[.webApplicationManifestFile] ?? ""
     }
 
     // MARK: - FaviconFinder
@@ -135,7 +135,7 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
         }
 
         // And turn it into something we can work with
-        let faviconURLs = rawIcons.compactMap { rawIcon -> FaviconURL? in
+        var faviconURLs = rawIcons.compactMap { rawIcon -> FaviconURL? in
             guard let rawFormat = rawIcon["src"] as? String else {
                 return nil
             }
@@ -158,6 +158,11 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
             )
         }
 
+        if !preferredType.isEmpty,
+           let preferredURL = FaviconRequestPolicy.redirectURL(preferredType, relativeTo: manifest.url),
+           let index = faviconURLs.firstIndex(where: { $0.source == preferredURL }) {
+            faviconURLs.insert(faviconURLs.remove(at: index), at: 0)
+        }
         return faviconURLs
     }
 
@@ -177,7 +182,8 @@ private extension WebApplicationManifestFaviconFinder {
     ///
     func manifestFileReference(from htmlHead: Element, documentURL: URL) throws -> ManifestFileReference? {
         let manifestFileAttr = try htmlHead.select("link").first {
-            try $0.attr("rel") == self.preferredType
+            try $0.attr("rel").split(whereSeparator: { $0.isWhitespace })
+                .contains(where: { $0.lowercased() == "manifest" })
         }
 
         guard let manifestFileAttr else {

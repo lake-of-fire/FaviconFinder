@@ -161,6 +161,81 @@ final class FaviconForwardPortTests: XCTestCase {
         for icon in icons { XCTAssertEqual(icon.httpHeaders, ["Accept-Language": "ja"]) }
     }
 
+    func testManifestPreferenceSelectsIconWithoutChangingLinkRelation() async throws {
+        let html = try SwiftSoup.parse("""
+            <head><base href='/assets/'>
+            <link rel='preferred.png' href='wrong.json'>
+            <link rel='alternate MANIFEST' href='app.webmanifest'></head>
+            """)
+        let finalURL = URL(string: "https://cdn.example.net/manifests/app.webmanifest")!
+        let body = #"{"icons":[{"src":"first.png"},{"src":"preferred.png"},{"src":"last.png"}]}"#
+        var requests: [URL] = []
+        let finder = WebApplicationManifestFaviconFinder(url: source,
+            configuration: .init(preferences: [.webApplicationManifestFile: "preferred.png"],
+                                 prefetchedHTML: html, httpHeaders: headers)
+        ) { url, _, sentHeaders in
+            requests.append(url)
+            XCTAssertEqual(sentHeaders, self.headers)
+            return .init(response: self.response(finalURL, body: body).response,
+                         url: finalURL, httpHeaders: ["Accept-Language": "ja"])
+        }
+        let icons = try await finder.find()
+        XCTAssertEqual(requests.map(\.absoluteString), ["https://origin.example.com/assets/app.webmanifest"])
+        XCTAssertEqual(icons.map { $0.source.absoluteString }, [
+            "https://cdn.example.net/manifests/preferred.png",
+            "https://cdn.example.net/manifests/first.png",
+            "https://cdn.example.net/manifests/last.png"
+        ])
+        for icon in icons { XCTAssertEqual(icon.httpHeaders, ["Accept-Language": "ja"]) }
+    }
+
+    func testUnmatchedOrUnsafeManifestPreferencePreservesDeclaredIconOrder() async throws {
+        let html = try SwiftSoup.parse("<head><link rel='manifest' href='/app.webmanifest'></head>")
+        let body = #"{"icons":[{"src":"first.png"},{"src":"last.png"}]}"#
+        for preference in ["", "missing.png", "file:///tmp/preferred.png",
+                           "https://user:password@origin.example.com/first.png"] {
+            var requests = 0
+            let finder = WebApplicationManifestFaviconFinder(url: source,
+                configuration: .init(preferences: [.webApplicationManifestFile: preference],
+                                     prefetchedHTML: html, httpHeaders: headers)
+            ) { url, _, sentHeaders in
+                requests += 1
+                XCTAssertEqual(url.absoluteString, "https://origin.example.com/app.webmanifest")
+                return .init(response: self.response(url, body: body).response,
+                             url: url, httpHeaders: sentHeaders)
+            }
+            let icons = try await finder.find()
+            XCTAssertEqual(requests, 1)
+            XCTAssertEqual(icons.map { $0.source.lastPathComponent }, ["first.png", "last.png"])
+            for icon in icons { XCTAssertEqual(icon.httpHeaders, headers) }
+        }
+    }
+
+    func testManifestPreferenceDoesNotInventAManifestRelation() async throws {
+        let html = try SwiftSoup.parse("""
+            <head><link rel='preferred.png' href='/wrong.json'>
+            <link rel='notmanifest' href='/also-wrong.json'></head>
+            """)
+        var requests = 0
+        let finder = WebApplicationManifestFaviconFinder(url: source,
+            configuration: .init(preferences: [.webApplicationManifestFile: "preferred.png"],
+                                 prefetchedHTML: html)
+        ) { url, _, _ in
+            requests += 1
+            return .init(response: self.response(url, body: #"{"icons":[{"src":"preferred.png"}]}"#).response,
+                         url: url, httpHeaders: nil)
+        }
+        do {
+            _ = try await finder.find()
+            XCTFail("An icon filename is not a manifest link relation")
+        } catch {
+            guard case FaviconError.failedToFindWebApplicationManifestFile = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+        XCTAssertEqual(requests, 0)
+    }
+
     func testCancellationDuringLoadCannotPublishAResponse() async {
         let source = self.source
         let task = Task {
