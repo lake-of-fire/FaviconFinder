@@ -43,6 +43,21 @@ final class FaviconLoopbackTransportTests: XCTestCase {
         XCTAssertNotEqual(result.url.port, fixture.url("echo").port)
     }
 
+    func testActualBackendRejectsHTTPErrorPageWithIconMetadata() async throws {
+        let fixture = try LoopbackFaviconServer()
+        defer { fixture.stop() }
+        do {
+            _ = try await FaviconFinder(url: fixture.url("error"),
+                configuration: .init(preferredSource: .html)
+            ).fetchFaviconURLs()
+            XCTFail("An error page icon must not be reported as the site's favicon")
+        } catch {
+            guard case FaviconError.failedToFindFavicon = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
     func testActualBackendEnforcesTheSharedRedirectBudget() async throws {
         let fixture = try LoopbackFaviconServer()
         defer { fixture.stop() }
@@ -141,6 +156,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError): pass
     def respond(self):
         path = self.path
+        if path in ['/error', '/favicon.ico']:
+            body = b"<head><link rel='icon' href='/error-icon.png'></head>"
+            self.send_response(404); self.send_header('Content-Type','text/html; charset=utf-8')
+            self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path in ['/same', '/cross', '/return', '/loop']:
             target = {'/same':'/echo', '/cross':f'http://127.0.0.1:{second.server_port}/return',
                       '/return':f'http://127.0.0.1:{first.server_port}/echo', '/loop':'/loop'}[path]
@@ -169,3 +188,4 @@ sys.stdin.buffer.read()
 """#
 }
 #endif
+
