@@ -196,19 +196,14 @@ private extension HTMLFaviconFinder {
             let href = try link.attr("href")
             let sizeTag = try link.attr("sizes")
 
-            // If this link's "rel" is something other than an accepted image
-            // format type, dismiss it
-            guard FaviconFormatType(rawValue: rel) != nil else {
+            // Link relations are ASCII-case-insensitive, ASCII-whitespace
+            // separated tokens, rather than one enum raw value.
+            guard let format = linkFormat(for: rel) else {
                 continue
             }
 
             // Get the base URL from the href
             guard let baseURL = href.baseUrl(from: htmlHead, from: pageURL)?.absoluteURL else {
-                continue
-            }
-
-            // Get the format type in our own internal type
-            guard let format = FaviconFormatType(rawValue: rel) else {
                 continue
             }
 
@@ -225,6 +220,29 @@ private extension HTMLFaviconFinder {
         }
 
         return links
+    }
+
+    /// Only HTML icon relations belong here; metadata and manifest format
+    /// names are not link relations. Preserve the historical shortcut label
+    /// for its specified spelling, while ordinary token lists identify icons.
+    func linkFormat(for rel: String) -> FaviconFormatType? {
+        let normalized = String(decoding: rel.utf8.map { byte in
+            (65...90).contains(byte) ? byte + 32 : byte
+        }, as: UTF8.self)
+        if normalized == FaviconFormatType.shortcutIcon.rawValue {
+            return .shortcutIcon
+        }
+        for token in normalized.unicodeScalars.split(whereSeparator: {
+            [9, 10, 12, 13, 32].contains($0.value)
+        }) {
+            switch String(String.UnicodeScalarView(token)) {
+            case FaviconFormatType.appleTouchIcon.rawValue: return .appleTouchIcon
+            case FaviconFormatType.appleTouchIconPrecomposed.rawValue: return .appleTouchIconPrecomposed
+            case FaviconFormatType.icon.rawValue: return .icon
+            default: continue
+            }
+        }
+        return nil
     }
 
     /// Parses the `<meta>` elements in the provided HTML head element
