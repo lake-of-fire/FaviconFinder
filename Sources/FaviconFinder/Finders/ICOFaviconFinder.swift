@@ -99,9 +99,14 @@ final class ICOFaviconFinder: FaviconFinderProtocol {
             throw FaviconError.failedToFindFavicon
         }
 
-        if let favicon = try await favicon(at: faviconUrl) {
-            return [favicon]
+        do {
+            if let favicon = try await favicon(at: faviconUrl) {
+                return [favicon]
+            }
+        } catch let error as FaviconURLSession.HTTPStatusError where error.statusCode == 404 {
+            // A missing subdomain icon still permits the documented root-domain lookup.
         }
+        try Task.checkCancellation()
 
         // We couldn't find any image, so let's try the root domain (just in case it's hiding there)
         // ie. If we couldn't find the image at "subdomain.google.com/favicon.ico", let's try "google.com/favicon.ico"
