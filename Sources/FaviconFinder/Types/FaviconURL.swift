@@ -66,7 +66,7 @@ public struct FaviconURL: Equatable, Sendable {
     ///   - source: The URL where the favicon is located.
     ///   - format: The format of the favicon.
     ///   - sourceType: The type of source where the favicon was found.
-    ///   - htmlSizeTag: The size tag extracted from HTML metadata, formatted as "120x120".
+    ///   - htmlSizeTag: The size tag extracted from HTML metadata, formatted as "120x120" or "16x16 180x180".
     ///
     public init(
         source: URL,
@@ -108,7 +108,7 @@ public extension FaviconURL {
 
 private extension FaviconURL {
 
-    /// Infers the size of the favicon from an HTML size tag (e.g., "120x120").
+    /// Infers the largest numeric size from an HTML size tag (e.g., "16x16 180x180").
     ///
     /// - Parameter htmlTag: A string representing the size from an HTML tag.
     /// - Returns: A `FaviconSize` instance representing the dimensions, or `nil` if parsing fails.
@@ -118,25 +118,19 @@ private extension FaviconURL {
             return nil
         }
 
-        // Split the size tag components into their individual numbers
-        let components = htmlTag.split(separator: "x")
-
-        // Make sure we only got two components, or something has gone wrong
-        guard components.count == 2 else {
-            return nil
-        }
-
-        // Grab the sizes as strings
-        let widthStr  = components[0]
-        let heightStr = components[1]
-
-        // Let's convert those strings into doubles
-        guard let width = Double(widthStr), let height = Double(heightStr) else {
-            return nil
-        }
-
-        // Wrap it up in a pretty ~bow~ Size
-        return .init(width: width, height: height)
+        // HTML sizes are ASCII-whitespace-separated tokens. Keep the largest
+        // usable numeric size; "any" has no numeric dimensions to rank.
+        return htmlTag.unicodeScalars.split(whereSeparator: {
+            [9, 10, 12, 13, 32].contains($0.value)
+        }).compactMap { token -> FaviconSize? in
+            let components = token.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "x" || $0 == "X" })
+            guard components.count == 2,
+                  let width = Double(String(String.UnicodeScalarView(components[0]))),
+                  let height = Double(String(String.UnicodeScalarView(components[1]))),
+                  width > 0, height > 0, width.isFinite, height.isFinite,
+                  (width * height).isFinite else { return nil }
+            return FaviconSize(width: width, height: height)
+        }.max(by: { $0.dimension < $1.dimension })
     }
 
 }
