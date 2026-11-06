@@ -113,4 +113,88 @@ struct HTMLFaviconResponseContextTests {
             #expect(icon.httpHeaders?["Authorization"] == "TEST_ONLY")
         }
     }
+
+    @Test func iconRelationsUseASCIICaseAndWhitespaceTokensForPrefetchedAndFetchedHTML() async throws {
+        let requested = URL(string: "https://example.com/start")!
+        let finalPage = URL(string: "https://example.com/news/index.html")!
+        let relations: [(String, FaviconFormatType)] = [
+            ("ICON", .icon),
+            ("  icon&#9;", .icon),
+            ("alternate&#9;IcOn&#10;stylesheet", .icon),
+            ("&#12;icon&#13;", .icon),
+            ("SHORTCUT ICON", .shortcutIcon),
+            ("shortcut&#9;icon", .icon),
+            ("APPLE-TOUCH-ICON", .appleTouchIcon),
+            ("alternate APPLE-TOUCH-ICON-PRECOMPOSED", .appleTouchIconPrecomposed)
+        ]
+        let links = relations.enumerated().map { index, relation in
+            "<link rel='\(relation.0)' href='icon\(index).png' sizes='32x32'>"
+        }.joined()
+        let body = "<head><base href='../assets/'>\(links)</head>"
+        for prefetched in [false, true] {
+            let document: Document?
+            if prefetched {
+                document = try SwiftSoup.parse(body)
+            } else {
+                document = nil
+            }
+            let finder = HTMLFaviconFinder(url: requested, configuration: .init(
+                prefetchedHTML: document,
+                httpHeaders: ["Authorization": "TEST_ONLY"]
+            ), transport: { _, _, _ in
+                #expect(!prefetched, "Prefetched HTML must not invoke transport")
+                return Response(data: Data(body.utf8), url: finalPage)
+            })
+            let icons = try await finder.find()
+            #expect(icons.map(\.format) == relations.map(\.1))
+            #expect(icons.map(\.source.absoluteString) == relations.indices.map {
+                "https://example.com/assets/icon\($0).png"
+            })
+            #expect(icons.allSatisfy { $0.size == FaviconSize(width: 32, height: 32) })
+            #expect(icons.allSatisfy { $0.httpHeaders?["Authorization"] == "TEST_ONLY" })
+        }
+    }
+
+    @Test func iconRelationsRejectSubstringsUnicodeWhitespaceAndUnrelatedFormatNames() async throws {
+        let page = URL(string: "https://example.com/page")!
+        let invalid = [
+            "noticon", "iconography", "apple-touch-icon-extra", "shortcut",
+            "alternate&#160;icon", "alternate&#11;icon", "&#160;icon",
+            "İCON", "og:image", "thumbnail", "ico", "launcher-icon-4x.png"
+        ]
+        let links = invalid.enumerated().map { index, rel in
+            "<link rel='\(rel)' href='/invalid\(index).png'>"
+        }.joined()
+        let body = "<head>\(links)<link rel='icon icon' href='/valid.png'></head>"
+        let finder = HTMLFaviconFinder(url: page, configuration: .init(
+            prefetchedHTML: try SwiftSoup.parse(body)
+        ))
+        let icons = try await finder.find()
+        #expect(icons.count == 1, "Only complete HTML icon tokens may yield candidates")
+        #expect(icons.first?.source.absoluteString == "https://example.com/valid.png")
+        #expect(icons.first?.format == .icon)
+    }
+
+    @Test func fetchedRelationTokensRetainRedirectCredentialFilteringAndHeaderImageOptIn() async throws {
+        let requested = URL(string: "https://private.example/start")!
+        let finalPage = URL(string: "https://public.example/news/index.html")!
+        let body = """
+            <head><link rel='alternate ICON' href='https://private.example/icon.png'>
+            <meta property='og:image' content='https://private.example/social.png'></head>
+            """
+        for acceptsHeaderImage in [false, true] {
+            let finder = HTMLFaviconFinder(url: requested, configuration: .init(
+                httpHeaders: ["Authorization": "TEST_ONLY", "Accept-Language": "ja"],
+                acceptHeaderImage: acceptsHeaderImage
+            ), transport: { _, _, _ in
+                Response(data: Data(body.utf8), url: finalPage)
+            })
+            let icons = try await finder.find()
+            #expect(icons.map(\.format) == (acceptsHeaderImage ? [.icon, .metaOpenGraphImage] : [.icon]))
+            for icon in icons {
+                #expect(icon.httpHeaders?.count == 1)
+                #expect(icon.httpHeaders?["Accept-Language"] == "ja")
+            }
+        }
+    }
 }
