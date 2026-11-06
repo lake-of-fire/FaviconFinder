@@ -10,6 +10,9 @@
 import Foundation
 import SwiftSoup
 import Testing
+#if os(Linux)
+import NIOHTTP1
+#endif
 
 struct FaviconFinderTests {
 
@@ -161,15 +164,22 @@ struct FaviconFinderTests {
     @Test("Test ForeignEncoding Favicon")
     func testForeignEncoding() async throws {
         let pageURL = URL(string: "https://shift-jis.example/")!
+#if !os(Linux)
         let urlResponse = try #require(HTTPURLResponse(
             url: pageURL,
             statusCode: 200,
             httpVersion: "HTTP/1.1",
             headerFields: ["Content-Type": "text/html; charset=Shift_JIS"]
         ))
+#endif
         let source = "<html><head><title>日本語</title><link rel=\"icon\" href=\"/favicon.ico\"></head></html>"
         let encoded = try #require(source.data(using: .shiftJIS))
+#if os(Linux)
+        // The selected Linux Response initializer accepts HTTPHeaders, not URLResponse.
+        let response = Response((encoded, HTTPHeaders([("content-type", "text/html; charset=shift_jis")])))
+#else
         let response = Response((encoded, urlResponse))
+#endif
         let decoded = try #require(String(data: response.data, encoding: response.textEncoding))
         let document = try SwiftSoup.parse(decoded)
         let title = try document.title()
