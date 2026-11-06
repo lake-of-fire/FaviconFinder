@@ -49,6 +49,54 @@ final class FaviconForwardPortTests: XCTestCase {
         XCTAssertEqual(result.httpHeaders, ["Accept-Language": "ja"])
     }
 
+    func testHTTPFailureBodiesAreRejectedBeforeParsingOrMetaRefresh() async {
+        let body = "<head><link rel='icon' href='/error-icon.png'><meta http-equiv='refresh' content='0; URL=/retry'></head>"
+        for status in [101, 300, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 429, 500, 503] {
+            var requests = 0
+            do {
+                _ = try await FaviconURLSession.documentTask(with: source,
+                    checkForMetaRefreshRedirect: true, httpHeaders: headers
+                ) { url, _ in
+                    requests += 1
+                    return self.response(url, status: status, body: body)
+                }
+                XCTFail("HTTP \(status) must not be admitted as a favicon document")
+            } catch {
+                XCTAssertEqual((error as? URLError)?.code, .badServerResponse, "HTTP \(status)")
+            }
+            XCTAssertEqual(requests, 1, "An error body must not trigger meta refresh")
+        }
+    }
+
+    func testHTTPRedirectToErrorResponseFailsWithoutPublishingItsBody() async {
+        var requests = 0
+        do {
+            _ = try await FaviconURLSession.dataTask(with: source,
+                checkForMetaRefreshRedirect: false, httpHeaders: headers
+            ) { url, _ in
+                requests += 1
+                return requests == 1
+                    ? self.response(url, status: 302, location: "/unavailable")
+                    : self.response(url, status: 503, body: "error image bytes")
+            }
+            XCTFail("Redirecting to an HTTP failure must not publish image data")
+        } catch {
+            XCTAssertEqual((error as? URLError)?.code, .badServerResponse)
+        }
+        XCTAssertEqual(requests, 2)
+    }
+
+    func testSuccessfulHTTPResponsePreservesItsBody() async throws {
+        for status in [200, 201, 206, 299] {
+            let response = try await FaviconURLSession.dataTask(with: source,
+                checkForMetaRefreshRedirect: false, httpHeaders: headers
+            ) { url, _ in
+                self.response(url, status: status, body: "favicon data")
+            }
+            XCTAssertEqual(response.data, Data("favicon data".utf8))
+        }
+    }
+
     func testHTTPLoopHasOneSharedFiniteBudget() async {
         var count = 0
         do {
@@ -387,3 +435,4 @@ final class FaviconForwardPortTests: XCTestCase {
         return .init(response: response, statusCode: status, location: location)
     }
 }
+

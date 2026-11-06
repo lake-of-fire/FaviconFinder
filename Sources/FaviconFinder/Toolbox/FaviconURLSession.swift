@@ -93,6 +93,11 @@ final class FaviconURLSession {
                 try state.follow(destination)
                 continue
             }
+            // Error pages can contain valid icon links, manifest JSON, or even
+            // image bytes. They must not become successful favicon discoveries.
+            guard (200..<300).contains(loaded.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
             if mayFollowMetaRefresh,
                let text = String(data: loaded.response.data, encoding: loaded.response.textEncoding),
                let html = try? SwiftSoup.parse(text),
@@ -168,3 +173,4 @@ final class FaviconURLSession {
         return nil
     }
 }
+
