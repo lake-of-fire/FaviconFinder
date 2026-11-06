@@ -62,7 +62,7 @@ final class FaviconForwardPortTests: XCTestCase {
                 }
                 XCTFail("HTTP \(status) must not be admitted as a favicon document")
             } catch {
-                XCTAssertEqual((error as? URLError)?.code, .badServerResponse, "HTTP \(status)")
+                XCTAssertEqual((error as? FaviconURLSession.HTTPStatusError)?.statusCode, status, "HTTP \(status)")
             }
             XCTAssertEqual(requests, 1, "An error body must not trigger meta refresh")
         }
@@ -81,7 +81,7 @@ final class FaviconForwardPortTests: XCTestCase {
             }
             XCTFail("Redirecting to an HTTP failure must not publish image data")
         } catch {
-            XCTAssertEqual((error as? URLError)?.code, .badServerResponse)
+            XCTAssertEqual((error as? FaviconURLSession.HTTPStatusError)?.statusCode, 503)
         }
         XCTAssertEqual(requests, 2)
     }
@@ -147,6 +147,128 @@ final class FaviconForwardPortTests: XCTestCase {
             let expected = icon.source.host == source.host ? headers : ["Accept-Language": "ja"]
             XCTAssertEqual(icon.httpHeaders, expected)
         }
+    }
+
+
+    func testICO404UsesRootFallbackWithFilteredHeaders() async throws {
+        let image = try XCTUnwrap(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="))
+        _ = try FaviconImage(data: image)
+        var requests: [(URL, [String: String?]?)] = []
+        let finder = ICOFaviconFinder(url: source, configuration: .init(httpHeaders: headers)) {
+            url, checksMetaRefresh, headers in
+            try await FaviconURLSession.dataTask(with: url,
+                checkForMetaRefreshRedirect: checksMetaRefresh, httpHeaders: headers
+            ) { url, headers in
+                requests.append((url, headers))
+                return requests.count == 1
+                    ? self.response(url, status: 404, body: "not found")
+                    : self.response(url, data: image)
+            }.data
+        }
+        let icons = try await finder.find()
+        XCTAssertEqual(requests.map { $0.0.absoluteString }, [
+            "https://origin.example.com/favicon.ico", "https://example.com/favicon.ico"
+        ])
+        XCTAssertEqual(requests.first?.1, headers)
+        XCTAssertEqual(requests.last?.1, ["Accept-Language": "ja"])
+        let icon = try XCTUnwrap(icons.first)
+        XCTAssertEqual(icon.source.absoluteString, "https://example.com/favicon.ico")
+        XCTAssertEqual(icon.httpHeaders, ["Accept-Language": "ja"])
+    }
+
+    func testICOOtherHTTPFailuresDoNotStartRootFallback() async {
+        for status in [400, 401, 403, 410, 429, 500, 503] {
+            var requests = 0
+            let finder = ICOFaviconFinder(url: source, configuration: .init()) { url, _, _ in
+                try await FaviconURLSession.dataTask(with: url,
+                    checkForMetaRefreshRedirect: false, httpHeaders: nil
+                ) { url, _ in
+                    requests += 1
+                    return self.response(url, status: status)
+                }.data
+            }
+            do {
+                _ = try await finder.find()
+                XCTFail("HTTP \(status) must not start the root fallback")
+            } catch {
+                XCTAssertEqual((error as? FaviconURLSession.HTTPStatusError)?.statusCode, status)
+            }
+            XCTAssertEqual(requests, 1)
+        }
+    }
+
+    func testICORoot404TerminatesAfterOneFallback() async {
+        var requests = 0
+        let finder = ICOFaviconFinder(url: source, configuration: .init()) { url, _, _ in
+            try await FaviconURLSession.dataTask(with: url,
+                checkForMetaRefreshRedirect: false, httpHeaders: nil
+            ) { url, _ in
+                requests += 1
+                return self.response(url, status: 404)
+            }.data
+        }
+        do {
+            _ = try await finder.find()
+            XCTFail("Missing icons at both locations must fail")
+        } catch {
+            XCTAssertEqual((error as? FaviconURLSession.HTTPStatusError)?.statusCode, 404)
+        }
+        XCTAssertEqual(requests, 2)
+    }
+
+    func testICOTransportFailuresAndUpstreamCancellationDoNotStartRootFallback() async {
+        let codes: [URLError.Code] = [.cancelled, .dataLengthExceedsMaximum, .serverCertificateUntrusted,
+                                      .notConnectedToInternet, .httpTooManyRedirects, .badServerResponse]
+        for code in codes {
+            var requests = 0
+            let finder = ICOFaviconFinder(url: source, configuration: .init()) { _, _, _ in
+                requests += 1
+                throw URLError(code)
+            }
+            do {
+                _ = try await finder.find()
+                XCTFail("Transport \(code) must not start the root fallback")
+            } catch {
+                XCTAssertEqual((error as? URLError)?.code, code)
+            }
+            XCTAssertEqual(requests, 1)
+        }
+        var requests = 0
+        let finder = ICOFaviconFinder(url: source, configuration: .init()) { _, _, _ in
+            requests += 1
+            throw CancellationError()
+        }
+        do {
+            _ = try await finder.find()
+            XCTFail("Upstream cancellation must propagate")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(requests, 1)
+    }
+
+    func testICOCancellationAfter404DoesNotStartRootFallback() async {
+        let source = self.source
+        let task = Task {
+            var requests = 0
+            let finder = ICOFaviconFinder(url: source, configuration: .init()) { _, _, _ in
+                requests += 1
+                withUnsafeCurrentTask { $0?.cancel() }
+                throw FaviconURLSession.HTTPStatusError(statusCode: 404)
+            }
+            do {
+                _ = try await finder.find()
+                return (false, requests)
+            } catch is CancellationError {
+                return (true, requests)
+            } catch {
+                return (false, requests)
+            }
+        }
+        let (cancelled, requests) = await task.value
+        XCTAssertTrue(cancelled)
+        XCTAssertEqual(requests, 1)
     }
 
     func testICORequestsAndReturnedImagesRetainOnlyTheirOriginHeaders() async throws {
@@ -423,8 +545,8 @@ final class FaviconForwardPortTests: XCTestCase {
     }
 
     private func response(_ url: URL, status: Int = 200, location: String? = nil,
-                          body: String = "icon") -> FaviconURLSession.LoadedResponse {
-        let data = Data(body.utf8)
+                          body: String = "icon", data payload: Data? = nil) -> FaviconURLSession.LoadedResponse {
+        let data = payload ?? Data(body.utf8)
 #if os(Linux)
         let response = Response((data, HTTPHeaders([("content-type", "text/html; charset=utf-8")])))
 #else

@@ -11,6 +11,11 @@ import NIOHTTP1
 final class FaviconURLSession {
     static let maximumResponseBytes = FaviconRequestPolicy.maximumResponseBytes
 
+    /// Keep unavailable resources distinct from cancellation and transport failures.
+    struct HTTPStatusError: Error, Sendable {
+        let statusCode: Int
+    }
+
     struct LoadedResponse {
         let response: Response
         let statusCode: Int
@@ -96,7 +101,7 @@ final class FaviconURLSession {
             // Error pages can contain valid icon links, manifest JSON, or even
             // image bytes. They must not become successful favicon discoveries.
             guard (200..<300).contains(loaded.statusCode) else {
-                throw URLError(.badServerResponse)
+                throw HTTPStatusError(statusCode: loaded.statusCode)
             }
             if mayFollowMetaRefresh,
                let text = String(data: loaded.response.data, encoding: loaded.response.textEncoding),
