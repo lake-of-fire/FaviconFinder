@@ -4,6 +4,59 @@ import Testing
 @testable import FaviconFinder
 
 struct HTMLFaviconResponseContextTests {
+    @Test func HTMLSizeListsKeepLargestUsableDimensions() {
+        let page = URL(string: "https://example.com/icon.png")!
+        let cases: [(String?, FaviconSize?)] = [
+            ("16x16 512x512", FaviconSize(width: 512, height: 512)),
+            ("512x512 16x16", FaviconSize(width: 512, height: 512)),
+            ("\t16X16\n128x64\r\u{0C}32x32 ", FaviconSize(width: 128, height: 64)),
+            ("any 32x32 64X64", FaviconSize(width: 64, height: 64)),
+            ("bad 16xx16 0x1024 -1x1024 NaNx16 infx16 32x32", FaviconSize(width: 32, height: 32)),
+            ("1e308x1e308 32x32", FaviconSize(width: 32, height: 32)),
+            ("100.50x20.02", FaviconSize(width: 100.50, height: 20.02)),
+            ("any", nil), ("ANY", nil), ("", nil), (nil, nil),
+            ("16xx16", nil), ("x16", nil), ("16x", nil),
+            ("0x16 -1x16 NaNx16 infx16", nil),
+            ("16x16\u{00A0}512x512", nil),
+            ("16x16\u{0B}512x512", nil)
+        ]
+        for (sizes, expected) in cases {
+            let icon = FaviconURL(source: page, format: .icon, sourceType: .html, htmlSizeTag: sizes)
+            #expect(icon.size == expected, "Unexpected size for \(sizes ?? "<nil>")")
+        }
+    }
+
+    @Test func HTMLFinderLargestSelectsMultiSizeIconForFetchedAndPrefetchedPages() async throws {
+        let requested = URL(string: "https://example.com/start")!
+        let finalPage = URL(string: "https://example.com/news/index.html")!
+        let body = """
+            <head><base href='../assets/'>
+            <link rel='icon' href='multi.ico' sizes='16x16&#9;512X512'>
+            <link rel='apple-touch-icon' href='single.png' sizes='256x256'>
+            <link rel='icon' href='scalable.svg' sizes='any'>
+            </head>
+            """
+        for prefetched in [false, true] {
+            let document: Document? = prefetched ? try SwiftSoup.parse(body) : nil
+            let finder = HTMLFaviconFinder(url: requested, configuration: .init(
+                prefetchedHTML: document, httpHeaders: ["Authorization": "TEST_ONLY"]
+            ), transport: { url, _, headers in
+                #expect(!prefetched, "Prefetched HTML must not invoke transport")
+                #expect(url == requested)
+                #expect(headers?["Authorization"] == "TEST_ONLY")
+                return Response(data: Data(body.utf8), url: finalPage)
+            })
+            let icons = try await finder.find()
+            #expect(icons.count == 3)
+            #expect(icons.map(\.size) == [
+                FaviconSize(width: 512, height: 512), FaviconSize(width: 256, height: 256), nil
+            ])
+            let largest = try await icons.largest()
+            #expect(largest.source.absoluteString == "https://example.com/assets/multi.ico")
+            #expect(largest.httpHeaders?["Authorization"] == "TEST_ONLY")
+        }
+    }
+
     @Test func linksAndMetadataResolveFromActualPageAndHTMLBase() async throws {
         let requested = URL(string: "https://example.com/start")!
         let finalPage = URL(string: "https://example.com/news/index.html")!
