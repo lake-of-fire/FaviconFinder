@@ -32,7 +32,7 @@ let dependencies: [PackageDescription.Package.Dependency] = [
 ]
 
 let targetDependencies: [Target.Dependency] = [
-    .product(name: "SwiftSoup", package: "SwiftSoup")
+    "SwiftSoup"
 ]
 
 let plugins: [Target.PluginUsage] = [
