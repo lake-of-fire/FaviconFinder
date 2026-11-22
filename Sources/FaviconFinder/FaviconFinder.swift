@@ -58,6 +58,7 @@ public extension FaviconFinder {
     /// - Throws: A `CancellationError` if the task is cancelled by the user.
     ///
     func fetchFaviconURLs() async throws -> [FaviconURL] {
+        try Task.checkCancellation()
         // Cancel any previous task
         self.cancel()
 
@@ -66,7 +67,8 @@ public extension FaviconFinder {
         let url = self.url
 
         // Create a new task for fetching favicon URLs
-        self.currentTask = Task {
+        let search = Task {
+            try Task.checkCancellation()
             // All of the sources we'll use to search for our favicon
             // Get the users preferred source and move it to the front of the queue
             let preferredSource = config.preferredSource
@@ -74,7 +76,9 @@ public extension FaviconFinder {
             // If this is a mock run, just do that
             if preferredSource == .mock {
                 let finder = preferredSource.finder(url: url, configuration: config)
-                return try await finder.find()
+                let favicons = try await finder.find()
+                try Task.checkCancellation()
+                return favicons
             }
 
             let sources = FaviconSourceType.allCases.movingElementToFront(preferredSource)
@@ -82,35 +86,40 @@ public extension FaviconFinder {
             // Iterate through each source, trying to find the favicon
             // in each source until we find it.
             for source in sources {
+                try Task.checkCancellation()
                 print("Using source: [\(source)]")
                 do {
                     let finder = source.finder(url: url, configuration: config)
                     let faviconURLs = try await finder.find()
+                    try Task.checkCancellation()
                     return faviconURLs
-                } catch is CancellationError {
-                    // The user has cancelled this, let's bubble this up
-                    throw CancellationError()
-                } catch let error as NSError {
-                    // Check if the error is a URL cancellation error
-                    // Map this to Swift's `CancellationError`s
-                    if error.isCancelled {
-                        throw CancellationError()
-                    } else {
-                        print("Failed to find Favicon [\(error)]. Trying next source type.")
-                    }
                 } catch {
+                    try Task.checkCancellation()
+                    if error is CancellationError || (error as NSError).isCancelled {
+                        throw CancellationError()
+                    }
                     print("Failed to find Favicon [\(error)]. Trying next source type.")
                 }
             }
 
+            try Task.checkCancellation()
             throw FaviconError.failedToFindFavicon
         }
+        self.currentTask = search
 
-        // Await the result of the current task
-        guard let currentTask else {
-            throw FaviconError.other
+        // The mutable slot may already hold a different operation on cancellation.
+        return try await withTaskCancellationHandler {
+            do {
+                let favicons = try await search.value
+                try Task.checkCancellation()
+                return favicons
+            } catch {
+                try Task.checkCancellation()
+                throw error
+            }
+        } onCancel: {
+            search.cancel()
         }
-        return try await currentTask.value
     }
 
     /// Cancels the current favicon fetching task if one is active.

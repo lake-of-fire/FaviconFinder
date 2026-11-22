@@ -77,6 +77,51 @@ final class FaviconURLSessionResponseLimitTests: XCTestCase {
         XCTAssertEqual(response.url, fixture.url)
     }
 
+    func testPrecancelledFaviconSearchDoesNotMakeARequest() async throws {
+        let fixture = ResponseLimitFixture(body: Data("<head><link rel='icon' href='/icon.png'></head>".utf8))
+        ResponseLimitProtocol.registry.insert(fixture)
+        defer { ResponseLimitProtocol.registry.remove(fixture) }
+        let operation = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await FaviconFinder(url: fixture.url, configuration: .init(preferredSource: .html))
+                .fetchFaviconURLs()
+        }
+
+        do {
+            _ = try await operation.value
+            XCTFail("Expected cancellation before the favicon search starts")
+        } catch is CancellationError {}
+        XCTAssertEqual(fixture.requestCount, 0)
+    }
+
+    func testCancellingFaviconSearchStopsItsUnfinishedRequestWithoutFallback() async {
+        let fixture = ResponseLimitFixture(body: Data("<head>".utf8), finishes: false)
+        ResponseLimitProtocol.registry.insert(fixture)
+        defer { ResponseLimitProtocol.registry.remove(fixture) }
+        let completed = expectation(description: "Favicon finder reached its terminal result")
+        let operation = Task {
+            defer { completed.fulfill() }
+            do {
+                _ = try await FaviconFinder(url: fixture.url, configuration: .init(preferredSource: .html))
+                    .fetchFaviconURLs()
+                XCTFail("Expected cancellation of the favicon search")
+            } catch is CancellationError {
+            } catch {
+                XCTFail("Expected CancellationError, got \(error)")
+            }
+        }
+
+        await fulfillment(of: [fixture.requestStarted], timeout: 5)
+        operation.cancel()
+        await fulfillment(of: [fixture.stoppedBeforeCleanup, completed], timeout: 5)
+
+        // Retain fixture ownership through teardown, including on timeout.
+        await cancelMatchingURLSessionTasks([fixture.url])
+        await fulfillment(of: [fixture.stoppedAfterCleanup], timeout: 2)
+        await operation.value
+        XCTAssertEqual(fixture.requestCount, 1)
+    }
+
     private func metaRefresh(to url: URL) -> Data {
         Data("<head><meta http-equiv='refresh' content='0; url=\(url.absoluteString)'></head>".utf8)
     }
@@ -149,15 +194,7 @@ final class FaviconURLSessionResponseLimitTests: XCTestCase {
         // Never invalidate the shared session or cancel another test's work.
         // Run this even after an assertion/timeout, while our URL is registered.
         operation.cancel()
-        let cancelledOwnTasks = expectation(description: "matching task cleanup")
-        let urls = fixtures.map(\.url)
-        URLSession.shared.getAllTasks { tasks in
-            for task in tasks where task.originalRequest?.url.map(urls.contains) == true {
-                task.cancel()
-            }
-            cancelledOwnTasks.fulfill()
-        }
-        await fulfillment(of: [cancelledOwnTasks], timeout: 2)
+        await cancelMatchingURLSessionTasks(fixtures.map(\.url))
         if !fixture.finishes {
             await fulfillment(of: [fixture.stoppedAfterCleanup], timeout: 2)
         }
@@ -165,6 +202,17 @@ final class FaviconURLSessionResponseLimitTests: XCTestCase {
         // A timeout assertion is not quiescence; keep registration until the operation joins.
         await operation.value
         return result
+    }
+
+    private func cancelMatchingURLSessionTasks(_ urls: [URL]) async {
+        let cancelledOwnTasks = expectation(description: "matching task cleanup")
+        URLSession.shared.getAllTasks { tasks in
+            for task in tasks where task.originalRequest?.url.map(urls.contains) == true {
+                task.cancel()
+            }
+            cancelledOwnTasks.fulfill()
+        }
+        await fulfillment(of: [cancelledOwnTasks], timeout: 2)
     }
 }
 
@@ -175,11 +223,13 @@ private final class ResponseLimitFixture: @unchecked Sendable {
     let body: Data
     let finishes: Bool
     let statusCode: Int?
+    let requestStarted = XCTestExpectation(description: "Fixture transport received its first request")
     let stoppedBeforeCleanup = XCTestExpectation(description: "transport stopped without cleanup")
     let stoppedAfterCleanup = XCTestExpectation(description: "transport stopped by end of cleanup")
     private let lock = NSLock()
     private var storedResult: Result<Response, Error>?
     private var storedRequest: URLRequest?
+    private var storedRequestCount = 0
     private var stopped = false
 
     convenience init(size: Int, finishes: Bool) {
@@ -194,6 +244,7 @@ private final class ResponseLimitFixture: @unchecked Sendable {
 
     var result: Result<Response, Error>? { lock.withLock { storedResult } }
     var receivedRequest: URLRequest? { lock.withLock { storedRequest } }
+    var requestCount: Int { lock.withLock { storedRequestCount } }
     var isStopped: Bool { lock.withLock { stopped } }
 
     func record(_ result: Result<Response, Error>) {
@@ -201,7 +252,12 @@ private final class ResponseLimitFixture: @unchecked Sendable {
     }
 
     func record(_ request: URLRequest) {
-        lock.withLock { storedRequest = request }
+        let isFirst = lock.withLock {
+            storedRequest = request
+            storedRequestCount += 1
+            return storedRequestCount == 1
+        }
+        if isFirst { requestStarted.fulfill() }
     }
 
     func stop() {
@@ -257,6 +313,7 @@ private final class ResponseLimitProtocol: URLProtocol, @unchecked Sendable {
             return
         }
         fixture.record(request)
+        guard !fixture.isStopped else { return }
         var headers = ["Content-Type": "text/plain; charset=iso-8859-1"]
         if fixture.finishes {
             headers["Content-Length"] = String(fixture.body.count)
