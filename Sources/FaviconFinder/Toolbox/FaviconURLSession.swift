@@ -40,6 +40,10 @@ final class FaviconURLSession {
     /// Keep response bodies bounded consistently on Apple and Linux.
     static let maximumResponseBytes = 2 * 1024 * 1024
 
+    struct HTTPStatusError: Error, Sendable {
+        let statusCode: Int
+    }
+
     /// Downloads data from the provided URL, optionally checking for meta-refresh redirects
     /// and handling cross-platform differences between Apple and Linux.
     ///
@@ -80,6 +84,13 @@ final class FaviconURLSession {
 // MARK: - Private
 
 private extension FaviconURLSession {
+
+    static func requireSuccessfulHTTPStatus(_ statusCode: Int?) throws {
+        try Task.checkCancellation()
+        if let statusCode, !(200..<300).contains(statusCode) {
+            throw HTTPStatusError(statusCode: statusCode)
+        }
+    }
 
 #if os(Linux)
 
@@ -128,6 +139,7 @@ private extension FaviconURLSession {
 
         // Collect the response body
         let byteBuffer = try await response.body.collect(upTo: FaviconURLSession.maximumResponseBytes)
+        try Self.requireSuccessfulHTTPStatus(Int(response.status.code))
         let data = Data(buffer: byteBuffer)
 
         // Check for meta-refresh redirect if needed
@@ -232,6 +244,7 @@ private extension FaviconURLSession {
             data.append(byte)
         }
 
+        try Self.requireSuccessfulHTTPStatus((response as? HTTPURLResponse)?.statusCode)
         return (data, response)
     }
 
