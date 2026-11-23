@@ -41,7 +41,12 @@ struct WebApplicationManifestFinderTests {
                   {"src":" icons/custom-512.png ","sizes":"48x48 512x512","purpose":"any","extra":true},
                   {"src":"../plain.svg","type":"image/svg+xml"},
                   {"src":"//cdn.example.com/icon.png","sizes":"any"},
+                  {"src":"http://cdn.example.com/plain-http.png","sizes":"32x32"},
                   {"src":"/root.png","sizes":"invalid 0x4 -2x3"},
+                  {"src":"file:///tmp/icon.png","sizes":"2048x2048"},
+                  {"src":"https://user:password@example.com/icon.png","sizes":"1024x1024"},
+                  {"src":"bad\\nicon.png","sizes":"1024x1024"},
+                  {"src":"bad\\\\icon.png","sizes":"1024x1024"},
                   {"src":42}, false,
                   {"src":"launcher-icon-4x.png","sizes":"192x192"}
                 ]}
@@ -49,12 +54,18 @@ struct WebApplicationManifestFinderTests {
         ])
         let finder = WebApplicationManifestFaviconFinder(url: page, configuration: .init(
             preferredSource: .webApplicationManifestFile,
-            preferences: [.webApplicationManifestFile: "launcher-icon-4x.png"],
+            preferences: [.webApplicationManifestFile: " \nlauncher-icon-4x.png\t "],
             checkForMetaRefreshRedirect: true
         ), transport: { try await fixture.fetch($0, $1, $2) })
         let icons = try await finder.find()
-        #expect(icons.count == 5)
-        #expect(icons.first?.source.absoluteString == "https://example.com/releases/v2/launcher-icon-4x.png")
+        #expect(icons.map(\.source.absoluteString) == [
+            "https://example.com/releases/v2/launcher-icon-4x.png",
+            "https://example.com/releases/v2/icons/custom-512.png",
+            "https://example.com/releases/plain.svg",
+            "https://cdn.example.com/icon.png",
+            "http://cdn.example.com/plain-http.png",
+            "https://example.com/root.png"
+        ])
         #expect(icons.first?.format == .launcherIcon4x)
         let ordinary = try #require(icons.first(where: { $0.source.lastPathComponent == "custom-512.png" }))
         #expect(ordinary.format == .icon)
@@ -62,6 +73,7 @@ struct WebApplicationManifestFinderTests {
         #expect(ordinary.size?.height == 512)
         #expect(icons.contains(where: { $0.source.absoluteString == "https://example.com/releases/plain.svg" && $0.size == nil }))
         #expect(icons.contains(where: { $0.source.absoluteString == "https://cdn.example.com/icon.png" && $0.size == nil }))
+        #expect(icons.contains(where: { $0.source.absoluteString == "http://cdn.example.com/plain-http.png" && $0.size?.width == 32 }))
         #expect(icons.contains(where: { $0.source.absoluteString == "https://example.com/root.png" && $0.size == nil }))
         let largest = try await icons.largest()
         #expect(largest.source == ordinary.source)
@@ -206,7 +218,12 @@ struct WebApplicationManifestFinderTests {
 #endif
 
     @Test func unusableManifestThrowsInsteadOfEndingSourceFallbackWithEmptySuccess() async throws {
-        for body in ["{}", "{\"icons\":[]}", "{\"icons\":[false,{\"src\":42},{\"src\":\" \"}]}"] {
+        for body in [
+            "{}",
+            #"{"icons":[]}"#,
+            #"{"icons":[false,{"src":42},{"src":" "}]}"#,
+            #"{"icons":[{"src":"file:///tmp/icon.png"},{"src":"data:image/png;base64,AA=="},{"src":"https://user:password@example.com/icon.png"},{"src":"https:///icon.png"}]}"#
+        ] {
             let page = URL(string: "https://example.com/page")!
             let manifest = URL(string: "https://example.com/app.webmanifest")!
             let document = try SwiftSoup.parse("<head><link rel='manifest' href='/app.webmanifest'></head>")
