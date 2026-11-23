@@ -167,8 +167,7 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
                 return nil
             }
             let sourceString = rawSource.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !sourceString.isEmpty,
-                  let source = URL(string: sourceString, relativeTo: manifestURL)?.absoluteURL else {
+            guard let source = Self.iconURL(sourceString, relativeTo: manifestURL) else {
                 return nil
             }
             return FaviconURL(
@@ -184,8 +183,8 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
         guard !faviconURLs.isEmpty else {
             throw FaviconError.webApplicationManifestFileConainedNoIcons
         }
-        if !preferredType.isEmpty,
-           let preferredURL = URL(string: preferredType, relativeTo: manifestURL)?.absoluteURL,
+        let preferredReference = preferredType.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let preferredURL = Self.iconURL(preferredReference, relativeTo: manifestURL),
            let index = faviconURLs.firstIndex(where: { $0.source == preferredURL }) {
             faviconURLs.insert(faviconURLs.remove(at: index), at: 0)
         }
@@ -197,6 +196,20 @@ final class WebApplicationManifestFaviconFinder: FaviconFinderProtocol {
 // MARK: - Private
 
 private extension WebApplicationManifestFaviconFinder {
+
+    static func iconURL(_ trimmedReference: String, relativeTo manifestURL: URL) -> URL? {
+        guard !trimmedReference.isEmpty,
+              !trimmedReference.contains("\\"),
+              !trimmedReference.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+              let url = URL(string: trimmedReference, relativeTo: manifestURL)?.absoluteURL,
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil else {
+            return nil
+        }
+        return url
+    }
 
     /// Searches the provided HTML head element for a `<link>` tag that references the manifest file.
     ///
